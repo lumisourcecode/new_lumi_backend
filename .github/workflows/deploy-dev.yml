@@ -59,13 +59,15 @@ jobs:
             fi
 
             # Clone/update backend repo
+            CLEAN_GIT_REPO_URL="$(printf '%s' "${GIT_REPO_URL}" | LC_ALL=C tr -cd '[:print:]')"
             sudo mkdir -p "'"${APP_DIR}"'"
             sudo chown -R "'"${EC2_USER}"':'"${EC2_USER}"'" "'"${APP_DIR}"'"
             if [ ! -d "'"${APP_DIR}"'/.git" ]; then
-              [ -z "'"${GIT_REPO_URL}"'" ] && { echo "GIT_REPO_URL required"; exit 1; }
-              git clone --branch dev --single-branch "'"${GIT_REPO_URL}"'" "'"${APP_DIR}"'"
+              [ -z "${CLEAN_GIT_REPO_URL}" ] && { echo "GIT_REPO_URL required"; exit 1; }
+              git clone --branch dev --single-branch "${CLEAN_GIT_REPO_URL}" "'"${APP_DIR}"'"
             fi
             cd "'"${APP_DIR}"'"
+            git remote set-url origin "${CLEAN_GIT_REPO_URL}" 2>/dev/null || true
             git fetch origin dev
             git checkout dev
             git reset --hard origin/dev
