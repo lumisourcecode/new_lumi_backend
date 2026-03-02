@@ -64,7 +64,8 @@ jobs:
 
             # .env from secret
             if [ -n "'"${BACKEND_ENV_B64}"'" ]; then
-              echo "'"${BACKEND_ENV_B64}"'" | base64 -d > .env
+              CLEAN_BACKEND_ENV_B64="$(printf '%s' "'"${BACKEND_ENV_B64}"'" | tr -d '\r\n\t ' | tr -cd 'A-Za-z0-9+/=')"
+              printf '%s' "${CLEAN_BACKEND_ENV_B64}" | base64 -d > .env
             fi
 
             bash scripts/deploy-ec2.sh
