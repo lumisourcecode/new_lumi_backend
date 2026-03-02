@@ -53,7 +53,10 @@ jobs:
             # Node, PM2, Docker
             command -v node >/dev/null 2>&1 || (curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs)
             command -v pm2 >/dev/null 2>&1 || sudo npm i -g pm2
-            command -v docker >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y docker.io docker-compose-plugin)
+            command -v docker >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y docker.io)
+            if ! docker compose version >/dev/null 2>&1; then
+              sudo apt-get install -y docker-compose >/dev/null 2>&1 || true
+            fi
 
             # Clone/update backend repo
             sudo mkdir -p "'"${APP_DIR}"'"
