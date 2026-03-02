@@ -17,9 +17,17 @@ jobs:
       - name: Configure SSH key
         env:
           EC2_SSH_KEY_B64: ${{ secrets.EC2_SSH_KEY_B64 }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s' "$EC2_SSH_KEY_B64" | base64 -d | tr -d '\r' > ~/.ssh/id_rsa
+          if [ -n "$EC2_SSH_KEY_B64" ]; then
+            printf '%s' "$EC2_SSH_KEY_B64" | base64 -d | tr -d '\r' > ~/.ssh/id_rsa
+          elif [ -n "$EC2_SSH_KEY" ]; then
+            printf '%s' "$EC2_SSH_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          else
+            echo "Missing EC2_SSH_KEY_B64 or EC2_SSH_KEY secret" >&2
+            exit 1
+          fi
           chmod 600 ~/.ssh/id_rsa
           ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null
 
