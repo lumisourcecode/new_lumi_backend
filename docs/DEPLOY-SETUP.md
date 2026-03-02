@@ -1,0 +1,93 @@
+# Backend Deploy Setup – Step by Step
+
+Auto-deploy to EC2 when you push to `dev`.
+
+---
+
+## Step 1: Create GitHub PAT with workflow scope
+
+1. Go to **https://github.com/settings/tokens/new**
+2. **Note:** `Lumi Backend Deploy`
+3. **Expiration:** 90 days (or No expiration)
+4. **Scopes:** Check:
+   - ✅ **repo** (Full control of private repositories)
+   - ✅ **workflow** (Update GitHub Action workflows)
+5. Click **Generate token**
+6. Copy the token and store it safely (you won’t see it again)
+
+---
+
+## Step 2: Add GitHub Secrets
+
+1. Open your **backend repo** on GitHub
+2. Go to **Settings** → **Secrets and variables** → **Actions**
+3. Click **New repository secret** and add each:
+
+| Secret Name       | How to get the value |
+|-------------------|----------------------|
+| `EC2_HOST`        | EC2 public IP (e.g. `13.239.237.63`) |
+| `EC2_USER`        | SSH user, usually `ubuntu` |
+| `EC2_SSH_KEY`     | Full content of your `.pem` file (including `-----BEGIN...` and `-----END...`) |
+| `EC2_APP_DIR`     | Deploy path, e.g. `/var/www/lumi-ride-backend` |
+| `GIT_REPO_URL`    | `https://YOUR_GITHUB_USER:YOUR_PAT@github.com/ORG/REPO.git` (backend repo URL with PAT from Step 1) |
+| `BACKEND_ENV_B64` | See Step 3 below |
+
+---
+
+## Step 3: Create BACKEND_ENV_B64
+
+1. Edit `backend/.env` with your real values (JWT_SECRET, DB_PASSWORD, etc.)
+2. Encode it:
+   ```bash
+   cd backend
+   base64 -i .env | tr -d '\n'
+   ```
+3. Copy the entire output (one long string)
+4. Add as secret `BACKEND_ENV_B64` in GitHub
+
+---
+
+## Step 4: Configure Git to use PAT for push
+
+```bash
+cd /Users/Lumi\ rides/UI
+git remote set-url origin https://YOUR_GITHUB_USER:YOUR_PAT@github.com/ORG/REPO.git
+```
+
+Replace `YOUR_GITHUB_USER`, `YOUR_PAT`, `ORG`, and `REPO` with your backend repo details.
+
+---
+
+## Step 5: Push the workflow
+
+```bash
+cd /Users/Lumi\ rides/UI
+git add backend/.github backend/docs .gitignore backend/README.md
+git commit -m "Add backend deploy workflow"
+git push origin dev
+```
+
+---
+
+## Step 6: Verify
+
+1. Go to your repo → **Actions**
+2. You should see **Deploy Backend Dev to EC2** run
+3. Check the run logs for success
+
+---
+
+## Checklist
+
+- [ ] PAT created with **repo** + **workflow** scopes
+- [ ] All 6 secrets added in GitHub
+- [ ] `GIT_REPO_URL` includes PAT for private repo
+- [ ] `BACKEND_ENV_B64` = base64 of `backend/.env`
+- [ ] Git remote updated with PAT
+- [ ] Pushed to `dev`
+
+---
+
+## Manual run
+
+**Actions** → **Deploy Backend Dev to EC2** → **Run workflow** → **Run workflow**

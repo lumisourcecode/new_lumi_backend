@@ -1,0 +1,68 @@
+# Deploy Backend Dev: triggers on push to dev
+name: Deploy Backend Dev to EC2
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH key
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Deploy on EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          APP_DIR: ${{ secrets.EC2_APP_DIR }}
+          GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}
+          BACKEND_ENV_B64: ${{ secrets.BACKEND_ENV_B64 }}
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+
+            # Swap (prevents OOM)
+            if ! sudo swapon --show 2>/dev/null | grep -q swapfile; then
+              [ ! -f /swapfile ] && (sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none)
+              [ -f /swapfile ] && sudo chmod 600 /swapfile && sudo mkswap /swapfile 2>/dev/null && sudo swapon /swapfile 2>/dev/null || true
+              sudo grep -q swapfile /etc/fstab 2>/dev/null || echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab >/dev/null
+            fi
+
+            # Node, PM2, Docker
+            command -v node >/dev/null 2>&1 || (curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs)
+            command -v pm2 >/dev/null 2>&1 || sudo npm i -g pm2
+            command -v docker >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y docker.io docker-compose-plugin)
+
+            # Clone/update backend repo
+            sudo mkdir -p "'"${APP_DIR}"'"
+            sudo chown -R "'"${EC2_USER}"':'"${EC2_USER}"'" "'"${APP_DIR}"'"
+            if [ ! -d "'"${APP_DIR}"'/.git" ]; then
+              [ -z "'"${GIT_REPO_URL}"'" ] && { echo "GIT_REPO_URL required"; exit 1; }
+              git clone --branch dev --single-branch "'"${GIT_REPO_URL}"'" "'"${APP_DIR}"'"
+            fi
+            cd "'"${APP_DIR}"'"
+            git fetch origin dev
+            git checkout dev
+            git reset --hard origin/dev
+
+            # .env from secret
+            if [ -n "'"${BACKEND_ENV_B64}"'" ]; then
+              echo "'"${BACKEND_ENV_B64}"'" | base64 -d > .env
+            fi
+
+            bash scripts/deploy-ec2.sh
+            echo "Backend deploy complete."
+          '

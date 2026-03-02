@@ -1,0 +1,17 @@
+{
+  "name": "lumi-backend",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n gateway,auth,rider,driver,agent,admin -c blue,green,magenta,cyan,yellow,red \"npm:dev -w @lumi/api-gateway\" \"npm:dev -w @lumi/auth-service\" \"npm:dev -w @lumi/rider-service\" \"npm:dev -w @lumi/driver-service\" \"npm:dev -w @lumi/agent-service\" \"npm:dev -w @lumi/admin-service\"",
+    "db:init": "npm run db:init -w @lumi/shared"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
+

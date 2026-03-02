@@ -1,0 +1,194 @@
+import { pool } from "./client";
+
+const migrationSql = `
+create extension if not exists "pgcrypto";
+
+create table if not exists users (
+  id uuid primary key default gen_random_uuid(),
+  email text unique not null,
+  password_hash text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+alter table users add column if not exists is_super_admin boolean not null default false;
+alter table users add column if not exists created_by uuid;
+
+create table if not exists user_roles (
+  user_id uuid not null references users(id) on delete cascade,
+  role text not null check (role in ('rider','driver','agent','admin')),
+  primary key (user_id, role)
+);
+
+create table if not exists refresh_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id) on delete cascade,
+  token_hash text not null,
+  expires_at timestamptz not null,
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists rider_profiles (
+  user_id uuid primary key references users(id) on delete cascade,
+  full_name text,
+  phone text,
+  ndis_id text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists driver_profiles (
+  user_id uuid primary key references users(id) on delete cascade,
+  full_name text,
+  phone text,
+  vehicle_rego text,
+  verification_status text not null default 'Pending',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists agent_profiles (
+  user_id uuid primary key references users(id) on delete cascade,
+  org_name text,
+  contact_name text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists admin_profiles (
+  user_id uuid primary key references users(id) on delete cascade,
+  display_name text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists bookings (
+  id uuid primary key default gen_random_uuid(),
+  rider_id uuid not null references users(id) on delete cascade,
+  pickup text not null,
+  dropoff text not null,
+  scheduled_at timestamptz not null,
+  status text not null default 'pending_matching',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists trips (
+  id uuid primary key default gen_random_uuid(),
+  booking_id uuid not null references bookings(id) on delete cascade,
+  driver_id uuid references users(id) on delete set null,
+  state text not null default 'Assigned',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists driver_documents (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null references users(id) on delete cascade,
+  doc_type text not null,
+  status text not null default 'Pending',
+  expiry date
+);
+
+create table if not exists incidents (
+  id uuid primary key default gen_random_uuid(),
+  trip_id uuid references trips(id) on delete set null,
+  severity text not null default 'medium',
+  message text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists messages (
+  id uuid primary key default gen_random_uuid(),
+  trip_id uuid references trips(id) on delete set null,
+  sender_id uuid not null references users(id) on delete cascade,
+  body text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists driver_enrollments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending','approved','rejected')),
+  full_name text,
+  phone text,
+  vehicle_rego text,
+  notes text,
+  reviewed_by uuid references users(id) on delete set null,
+  reviewed_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique(user_id)
+);
+
+create table if not exists activity_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete set null,
+  action text not null,
+  entity_type text not null,
+  entity_id text,
+  payload jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists notifications (
+  id uuid primary key default gen_random_uuid(),
+  recipient_id uuid not null references users(id) on delete cascade,
+  type text not null,
+  payload jsonb,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+alter table bookings add column if not exists mobility_needs text;
+alter table bookings add column if not exists notes text;
+alter table bookings add column if not exists created_by uuid references users(id) on delete set null;
+alter table trips add column if not exists assigned_at timestamptz;
+alter table driver_profiles add column if not exists vehicle_make text;
+alter table driver_profiles add column if not exists vehicle_color text;
+alter table driver_profiles add column if not exists emergency_contact text;
+
+alter table driver_documents add column if not exists admin_notes text;
+
+alter table driver_profiles add column if not exists date_of_birth date;
+alter table driver_profiles add column if not exists address_line1 text;
+alter table driver_profiles add column if not exists suburb text;
+alter table driver_profiles add column if not exists state text;
+alter table driver_profiles add column if not exists postcode text;
+alter table driver_profiles add column if not exists license_number text;
+
+alter table driver_enrollments add column if not exists verification_stage text default 'profile';
+alter table driver_enrollments add column if not exists admin_notes text;
+
+create table if not exists driver_interest (
+  id uuid primary key default gen_random_uuid(),
+  full_name text,
+  email text not null,
+  phone text,
+  role_type text,
+  suburb text,
+  vehicle_info text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists password_reset_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id) on delete cascade,
+  token_hash text not null,
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+alter table users add column if not exists phone text;
+alter table users add column if not exists google_id text;
+
+create table if not exists phone_otps (
+  id uuid primary key default gen_random_uuid(),
+  phone text not null,
+  code_hash text not null,
+  portal text not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+`;
+
+export async function runMigrations() {
+  await pool.query(migrationSql);
+}
+
