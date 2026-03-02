@@ -36,9 +36,10 @@ jobs:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
           APP_DIR: ${{ secrets.EC2_APP_DIR }}
-          GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}
           BACKEND_ENV_B64: ${{ secrets.BACKEND_ENV_B64 }}
         run: |
+          ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" "mkdir -p '${APP_DIR}'"
+          rsync -az --delete --exclude '.git' --exclude 'node_modules' -e "ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20" ./ "${EC2_USER}@${EC2_HOST}:${APP_DIR}/"
           ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -58,19 +59,8 @@ jobs:
               sudo apt-get install -y docker-compose >/dev/null 2>&1 || true
             fi
 
-            # Clone/update backend repo
-            CLEAN_GIT_REPO_URL="$(printf '%s' "${GIT_REPO_URL}" | LC_ALL=C tr -cd '[:print:]')"
-            sudo mkdir -p "'"${APP_DIR}"'"
-            sudo chown -R "'"${EC2_USER}"':'"${EC2_USER}"'" "'"${APP_DIR}"'"
-            if [ ! -d "'"${APP_DIR}"'/.git" ]; then
-              [ -z "${CLEAN_GIT_REPO_URL}" ] && { echo "GIT_REPO_URL required"; exit 1; }
-              git clone --branch dev --single-branch "${CLEAN_GIT_REPO_URL}" "'"${APP_DIR}"'"
-            fi
+            # Use synced code from runner
             cd "'"${APP_DIR}"'"
-            git remote set-url origin "${CLEAN_GIT_REPO_URL}" 2>/dev/null || true
-            git fetch origin dev
-            git checkout dev
-            git reset --hard origin/dev
 
             # .env from secret
             if [ -n "'"${BACKEND_ENV_B64}"'" ]; then
