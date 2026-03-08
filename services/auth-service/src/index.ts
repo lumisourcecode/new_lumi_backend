@@ -428,6 +428,7 @@ app.post("/auth/reset-password", async (req, res) => {
     return res.status(400).json({ error: "Invalid or expired reset link. Request a new one." });
   }
 
+  
   const userId = row.rows[0].user_id as string;
   const passwordHash = await hashPassword(password);
 
