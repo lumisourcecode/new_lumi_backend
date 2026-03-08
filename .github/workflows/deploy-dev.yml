@@ -38,7 +38,22 @@ jobs:
           APP_DIR: ${{ secrets.EC2_APP_DIR }}
           BACKEND_ENV_B64: ${{ secrets.BACKEND_ENV_B64 }}
         run: |
-          ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" "mkdir -p '${APP_DIR}'"
+          ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" '
+            set -e
+            mkdir -p "'"${APP_DIR}"'"
+            cd "'"${APP_DIR}"'"
+            FREE_KB="$(df -Pk . | awk "NR==2 {print \$4}")"
+            MIN_FREE_KB=$((1536 * 1024))
+            if [ "${FREE_KB}" -lt "${MIN_FREE_KB}" ]; then
+              echo "Low disk (${FREE_KB} KB free). Running cleanup before rsync."
+              npm cache clean --force >/dev/null 2>&1 || true
+              docker image prune -af >/dev/null 2>&1 || sudo docker image prune -af >/dev/null 2>&1 || true
+              sudo journalctl --vacuum-time=3d >/dev/null 2>&1 || true
+            else
+              echo "Disk healthy (${FREE_KB} KB free). Skipping heavy cleanup."
+            fi
+            df -h
+          '
           rsync -az --delete --exclude '.git' --exclude 'node_modules' -e "ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20" ./ "${EC2_USER}@${EC2_HOST}:${APP_DIR}/"
           ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" '
             set -e
