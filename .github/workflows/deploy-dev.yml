@@ -43,12 +43,17 @@ jobs:
             mkdir -p "'"${APP_DIR}"'"
             cd "'"${APP_DIR}"'"
             FREE_KB="$(df -Pk . | awk "NR==2 {print \$4}")"
-            MIN_FREE_KB=$((1536 * 1024))
+            MIN_FREE_KB=$((2048 * 1024))
             if [ "${FREE_KB}" -lt "${MIN_FREE_KB}" ]; then
               echo "Low disk (${FREE_KB} KB free). Running cleanup before rsync."
               npm cache clean --force >/dev/null 2>&1 || true
+              rm -rf ~/.npm/_cacache ~/.cache >/dev/null 2>&1 || true
+              pm2 flush >/dev/null 2>&1 || true
+              rm -f ~/.pm2/logs/*.log >/dev/null 2>&1 || true
               docker image prune -af >/dev/null 2>&1 || sudo docker image prune -af >/dev/null 2>&1 || true
               sudo journalctl --vacuum-time=3d >/dev/null 2>&1 || true
+              sudo apt-get clean >/dev/null 2>&1 || true
+              sudo rm -rf /var/lib/apt/lists/* >/dev/null 2>&1 || true
             else
               echo "Disk healthy (${FREE_KB} KB free). Skipping heavy cleanup."
             fi

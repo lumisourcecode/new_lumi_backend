@@ -27,6 +27,19 @@ function isSuperAdmin(claims: { sub: string }, email?: string) {
   return email?.toLowerCase() === SUPER_ADMIN_EMAIL;
 }
 
+const PARTNER_LIST_SQL = `
+  select u.id, u.email, u.is_active, u.created_at, ap.org_name, ap.contact_name,
+         (select count(*) from partner_clients pc where pc.partner_id = u.id) as clients_count
+  from users u
+  left join partner_profiles ap on ap.user_id = u.id
+  where exists (
+    select 1 from user_roles ur
+    where ur.user_id = u.id and ur.role in ('partner', 'agent')
+  )
+  order by u.created_at desc
+  limit 500
+`;
+
 app.get("/admin/users", async (req, res) => {
   try {
     const claims = requireAuth(req.headers.authorization);
@@ -39,13 +52,110 @@ app.get("/admin/users", async (req, res) => {
       left join user_roles ur on ur.user_id = u.id
     `;
     const params: unknown[] = [];
-    if (roleFilter && ["rider", "driver", "agent", "admin"].includes(roleFilter)) {
-      sql += ` where exists (select 1 from user_roles ur2 where ur2.user_id = u.id and ur2.role = $1)`;
-      params.push(roleFilter);
+    if (roleFilter && ["rider", "driver", "partner", "admin"].includes(roleFilter)) {
+      if (roleFilter === "partner") {
+        sql += ` where exists (select 1 from user_roles ur2 where ur2.user_id = u.id and ur2.role in ('partner','agent'))`;
+      } else {
+        sql += ` where exists (select 1 from user_roles ur2 where ur2.user_id = u.id and ur2.role = $1)`;
+        params.push(roleFilter);
+      }
     }
     sql += ` group by u.id order by u.created_at desc limit 500`;
     const users = await pool.query(sql, params);
     return res.json({ items: users.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/search", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const query = String(req.query.q ?? "").trim();
+    if (!query) {
+      return res.json({ users: [], bookings: [], trips: [], tickets: [], documents: [] });
+    }
+    const needle = `%${query}%`;
+
+    const users = await pool.query(
+      `select u.id, u.email, u.is_active, u.created_at,
+              rp.full_name as rider_name, dp.full_name as driver_name, pp.contact_name as partner_contact, pp.org_name as partner_org
+       from users u
+       left join rider_profiles rp on rp.user_id = u.id
+       left join driver_profiles dp on dp.user_id = u.id
+       left join partner_profiles pp on pp.user_id = u.id
+       where u.email ilike $1
+          or coalesce(rp.full_name,'') ilike $1
+          or coalesce(dp.full_name,'') ilike $1
+          or coalesce(pp.contact_name,'') ilike $1
+          or coalesce(pp.org_name,'') ilike $1
+       order by u.created_at desc
+       limit 50`,
+      [needle],
+    );
+
+    const bookings = await pool.query(
+      `select b.id, b.rider_id, b.pickup, b.dropoff, b.status, b.scheduled_at, b.created_at, u.email as rider_email
+       from bookings b
+       left join users u on u.id = b.rider_id
+       where b.id::text ilike $1
+          or b.pickup ilike $1
+          or b.dropoff ilike $1
+          or coalesce(b.status,'') ilike $1
+          or coalesce(u.email,'') ilike $1
+       order by b.created_at desc
+       limit 50`,
+      [needle],
+    );
+
+    const trips = await pool.query(
+      `select t.id, t.state, t.driver_id, t.created_at, b.id as booking_id, b.rider_id, b.pickup, b.dropoff
+       from trips t
+       left join bookings b on b.id = t.booking_id
+       where t.id::text ilike $1
+          or coalesce(t.state,'') ilike $1
+          or b.pickup ilike $1
+          or b.dropoff ilike $1
+       order by t.created_at desc
+       limit 50`,
+      [needle],
+    );
+
+    const tickets = await pool.query(
+      `select st.id, st.created_by, st.role, st.issue_type, st.priority, st.status, st.created_at, u.email as created_by_email
+       from support_tickets st
+       left join users u on u.id = st.created_by
+       where st.id::text ilike $1
+          or st.issue_type ilike $1
+          or st.message ilike $1
+          or coalesce(st.status,'') ilike $1
+          or coalesce(u.email,'') ilike $1
+       order by st.created_at desc
+       limit 50`,
+      [needle],
+    );
+
+    const documents = await pool.query(
+      `select dd.id, dd.doc_type, dd.status, dd.expiry, dd.driver_id, u.email as driver_email
+       from driver_documents dd
+       left join users u on u.id = dd.driver_id
+       where dd.id::text ilike $1
+          or dd.doc_type ilike $1
+          or coalesce(dd.status,'') ilike $1
+          or coalesce(u.email,'') ilike $1
+       order by dd.expiry asc nulls last
+       limit 50`,
+      [needle],
+    );
+
+    return res.json({
+      users: users.rows,
+      bookings: bookings.rows,
+      trips: trips.rows,
+      tickets: tickets.rows,
+      documents: documents.rows,
+    });
   } catch (error) {
     return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
   }
@@ -76,8 +186,8 @@ app.get("/admin/users/:id", async (req, res) => {
       "select full_name, phone, vehicle_rego, verification_status from driver_profiles where user_id = $1",
       [id],
     );
-    const agent = await pool.query(
-      "select org_name, contact_name from agent_profiles where user_id = $1",
+    const partner = await pool.query(
+      "select org_name, contact_name from partner_profiles where user_id = $1",
       [id],
     );
     const admin = await pool.query(
@@ -88,14 +198,144 @@ app.get("/admin/users/:id", async (req, res) => {
       "select count(*) as c from bookings where rider_id = $1",
       [id],
     );
+    const partnerClientsCount = await pool.query(
+      "select count(*) as c from partner_clients where partner_id = $1",
+      [id],
+    );
     return res.json({
       user: { ...user, roles },
       riderProfile: rider.rows[0] ?? null,
       driverProfile: driver.rows[0] ?? null,
-      agentProfile: agent.rows[0] ?? null,
+      partnerProfile: partner.rows[0] ?? null,
       adminProfile: admin.rows[0] ?? null,
       bookingsCount: Number(bookingsCount.rows[0]?.c ?? 0),
+      partnerClientsCount: Number(partnerClientsCount.rows[0]?.c ?? 0),
     });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/users/:id/history", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const bookings = await pool.query(
+      `select b.id, b.pickup, b.dropoff, b.scheduled_at, b.status, b.created_at,
+              b.created_by, t.id as trip_id, t.state as trip_state, t.driver_id
+       from bookings b
+       left join trips t on t.booking_id = b.id
+       where b.rider_id = $1 or b.created_by = $1
+       order by b.created_at desc
+       limit 300`,
+      [id],
+    );
+    const trips = await pool.query(
+      `select t.id, t.state, t.assigned_at, t.created_at, t.driver_id, b.id as booking_id, b.pickup, b.dropoff
+       from trips t
+       join bookings b on b.id = t.booking_id
+       where t.driver_id = $1
+       order by t.created_at desc
+       limit 300`,
+      [id],
+    );
+    return res.json({ bookings: bookings.rows, trips: trips.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/users/:id/documents", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const docs = await pool.query(
+      "select id, doc_type, status, expiry, admin_notes from driver_documents where driver_id = $1 order by doc_type",
+      [id],
+    );
+    return res.json({ items: docs.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/users/:id/activity", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const rows = await pool.query(
+      `select id, action, entity_type, entity_id, payload, created_at
+       from activity_log
+       where user_id = $1
+       order by created_at desc
+       limit 300`,
+      [id],
+    );
+    return res.json({ items: rows.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/users/:id/relationships", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const partnerClients = await pool.query(
+      `select u.id, u.email, rp.full_name, rp.phone, rp.ndis_id, pc.notes, pc.created_at
+       from partner_clients pc
+       join users u on u.id = pc.rider_id
+       left join rider_profiles rp on rp.user_id = pc.rider_id
+       where pc.partner_id = $1
+       order by pc.created_at desc`,
+      [id],
+    );
+    const riderPartners = await pool.query(
+      `select u.id, u.email, pp.org_name, pp.contact_name, pc.notes, pc.created_at
+       from partner_clients pc
+       join users u on u.id = pc.partner_id
+       left join partner_profiles pp on pp.user_id = pc.partner_id
+       where pc.rider_id = $1
+       order by pc.created_at desc`,
+      [id],
+    );
+    return res.json({ partnerClients: partnerClients.rows, riderPartners: riderPartners.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.post("/admin/partners/:id/clients", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const riderId = String(req.body?.riderId ?? "").trim();
+    const notes = String(req.body?.notes ?? "").trim() || null;
+    if (!riderId) return res.status(400).json({ error: "riderId is required" });
+    await pool.query(
+      `insert into partner_clients (partner_id, rider_id, notes, created_by)
+       values ($1, $2, $3, $4)
+       on conflict (partner_id, rider_id) do update set notes = coalesce(excluded.notes, partner_clients.notes)`,
+      [id, riderId, notes, claims.sub],
+    );
+    return res.status(201).json({ ok: true });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.delete("/admin/partners/:id/clients/:riderId", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id, riderId } = req.params;
+    await pool.query("delete from partner_clients where partner_id = $1 and rider_id = $2", [id, riderId]);
+    return res.json({ ok: true });
   } catch (error) {
     return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
   }
@@ -156,9 +396,9 @@ app.post("/admin/users", async (req, res) => {
         "insert into driver_profiles (user_id, full_name, phone, vehicle_rego) values ($1, $2, $3, $4) on conflict (user_id) do update set full_name = coalesce(excluded.full_name, driver_profiles.full_name), phone = coalesce(excluded.phone, driver_profiles.phone), vehicle_rego = coalesce(excluded.vehicle_rego, driver_profiles.vehicle_rego)",
         [userId, fullName ?? null, phone ?? null, vehicleRego ?? null],
       );
-    } else if (role === "agent") {
+  } else if (role === "partner") {
       await pool.query(
-        "insert into agent_profiles (user_id, org_name, contact_name) values ($1, $2, $3) on conflict (user_id) do update set org_name = coalesce(excluded.org_name, agent_profiles.org_name), contact_name = coalesce(excluded.contact_name, agent_profiles.contact_name)",
+        "insert into partner_profiles (user_id, org_name, contact_name) values ($1, $2, $3) on conflict (user_id) do update set org_name = coalesce(excluded.org_name, partner_profiles.org_name), contact_name = coalesce(excluded.contact_name, partner_profiles.contact_name)",
         [userId, orgName ?? null, fullName ?? null],
       );
     } else if (role === "admin") {
@@ -218,19 +458,222 @@ app.get("/admin/drivers", async (req, res) => {
   }
 });
 
+app.get("/admin/partners", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const users = await pool.query(PARTNER_LIST_SQL);
+    return res.json({ items: users.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+// Backward-compatible alias while frontend migrates.
 app.get("/admin/agents", async (req, res) => {
   try {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["admin"]);
-    const users = await pool.query(
-      `select u.id, u.email, u.is_active, u.created_at, ap.org_name, ap.contact_name
-       from users u
-       join user_roles ur on ur.user_id = u.id and ur.role = 'agent'
-       left join agent_profiles ap on ap.user_id = u.id
-       order by u.created_at desc
-       limit 500`,
-    );
+    const users = await pool.query(PARTNER_LIST_SQL);
     return res.json({ items: users.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/partners/:id/overview", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const partner = await pool.query(
+      `select u.id, u.email, u.is_active, u.created_at, pp.org_name, pp.contact_name
+       from users u
+       left join partner_profiles pp on pp.user_id = u.id
+       where u.id = $1`,
+      [id],
+    );
+    if (!partner.rowCount) return res.status(404).json({ error: "Partner not found" });
+    const roleRes = await pool.query("select role from user_roles where user_id = $1 order by role", [id]);
+    const roles = roleRes.rows.map((r: { role: string }) => (r.role === "agent" ? "partner" : r.role));
+    if (!roles.includes("partner")) return res.status(404).json({ error: "Partner not found" });
+    const clientsCount = await pool.query("select count(*) as c from partner_clients where partner_id = $1", [id]);
+    const bookingsCount = await pool.query("select count(*) as c from bookings where created_by = $1", [id]);
+    const plansCount = await pool.query("select count(*) as c from partner_travel_plans where partner_id = $1", [id]);
+    const ticketsCount = await pool.query("select count(*) as c from support_tickets where created_by = $1", [id]);
+    return res.json({
+      partner: partner.rows[0],
+      stats: {
+        clientsCount: Number(clientsCount.rows[0]?.c ?? 0),
+        bookingsCount: Number(bookingsCount.rows[0]?.c ?? 0),
+        plansCount: Number(plansCount.rows[0]?.c ?? 0),
+        ticketsCount: Number(ticketsCount.rows[0]?.c ?? 0),
+      },
+    });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.patch("/admin/partners/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const orgName = req.body?.orgName == null ? null : String(req.body.orgName).trim() || null;
+    const contactName = req.body?.contactName == null ? null : String(req.body.contactName).trim() || null;
+    const isActive = req.body?.isActive;
+    await pool.query(
+      `insert into partner_profiles (user_id, org_name, contact_name)
+       values ($1, $2, $3)
+       on conflict (user_id) do update
+       set org_name = coalesce(excluded.org_name, partner_profiles.org_name),
+           contact_name = coalesce(excluded.contact_name, partner_profiles.contact_name)`,
+      [id, orgName, contactName],
+    );
+    if (typeof isActive === "boolean") {
+      await pool.query("update users set is_active = $2 where id = $1", [id, isActive]);
+    }
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/partners/:id/bookings", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const rows = await pool.query(
+      `select b.id, b.rider_id, ru.email as rider_email, rp.full_name as rider_name,
+              b.pickup, b.dropoff, b.scheduled_at, b.status, b.notes, b.created_at
+       from bookings b
+       left join users ru on ru.id = b.rider_id
+       left join rider_profiles rp on rp.user_id = b.rider_id
+       where b.created_by = $1
+       order by b.created_at desc
+       limit 500`,
+      [id],
+    );
+    return res.json({ items: rows.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/partners/:id/plans", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const rows = await pool.query(
+      `select id, name, target_group, frequency, start_date, end_date, priority, notes, status, created_at, updated_at
+       from partner_travel_plans
+       where partner_id = $1
+       order by created_at desc
+       limit 500`,
+      [id],
+    );
+    return res.json({ items: rows.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.post("/admin/partners/:id/plans", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const name = String(req.body?.name ?? "").trim();
+    if (!name) return res.status(400).json({ error: "name is required" });
+    const created = await pool.query(
+      `insert into partner_travel_plans (partner_id, name, target_group, frequency, start_date, end_date, priority, notes, status)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       returning id`,
+      [
+        id,
+        name,
+        String(req.body?.targetGroup ?? "").trim() || null,
+        String(req.body?.frequency ?? "").trim() || "Weekly",
+        req.body?.startDate || null,
+        req.body?.endDate || null,
+        String(req.body?.priority ?? "").trim() || "Medium",
+        String(req.body?.notes ?? "").trim() || null,
+        String(req.body?.status ?? "").trim() || "Draft",
+      ],
+    );
+    return res.status(201).json({ id: created.rows[0]?.id });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.patch("/admin/partners/:id/plans/:planId", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id, planId } = req.params;
+    const updated = await pool.query(
+      `update partner_travel_plans
+       set name = coalesce($3, name),
+           target_group = coalesce($4, target_group),
+           frequency = coalesce($5, frequency),
+           start_date = coalesce($6, start_date),
+           end_date = coalesce($7, end_date),
+           priority = coalesce($8, priority),
+           notes = coalesce($9, notes),
+           status = coalesce($10, status),
+           updated_at = now()
+       where id = $1 and partner_id = $2
+       returning id`,
+      [
+        planId,
+        id,
+        req.body?.name ?? null,
+        req.body?.targetGroup ?? null,
+        req.body?.frequency ?? null,
+        req.body?.startDate ?? null,
+        req.body?.endDate ?? null,
+        req.body?.priority ?? null,
+        req.body?.notes ?? null,
+        req.body?.status ?? null,
+      ],
+    );
+    if (!updated.rowCount) return res.status(404).json({ error: "Plan not found" });
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.delete("/admin/partners/:id/plans/:planId", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id, planId } = req.params;
+    await pool.query("delete from partner_travel_plans where id = $1 and partner_id = $2", [planId, id]);
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/partners/:id/support-tickets", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const rows = await pool.query(
+      `select id, issue_type, reference_id, priority, message, status, created_at, updated_at
+       from support_tickets
+       where created_by = $1
+       order by created_at desc
+       limit 500`,
+      [id],
+    );
+    return res.json({ items: rows.rows });
   } catch (error) {
     return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
   }
@@ -447,13 +890,17 @@ app.get("/admin/bookings", async (req, res) => {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["admin"]);
     const result = await pool.query(
-      `select b.id, b.pickup, b.dropoff, b.scheduled_at, b.status, b.mobility_needs, b.notes, b.created_at,
+      `select b.id, b.rider_id, b.pickup, b.dropoff, b.pickup_lat, b.pickup_lng, b.dropoff_lat, b.dropoff_lng,
+              b.scheduled_at, b.status, b.mobility_needs, b.notes, b.created_at,
               rp.full_name as rider_name, rp.phone as rider_phone, u.email as rider_email,
-              t.id as trip_id, t.state as trip_state, t.driver_id
+              t.id as trip_id, t.state as trip_state, t.driver_id,
+              dp.full_name as driver_name, du.email as driver_email
        from bookings b
        join users u on u.id = b.rider_id
        left join rider_profiles rp on rp.user_id = b.rider_id
        left join trips t on t.booking_id = b.id
+       left join users du on du.id = t.driver_id
+       left join driver_profiles dp on dp.user_id = t.driver_id
        order by b.created_at desc
        limit 500`,
     );
@@ -468,14 +915,18 @@ app.post("/admin/bookings", async (req, res) => {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["admin"]);
     const { riderId, pickup, dropoff, scheduledAt, mobilityNeeds, notes, driverId } = req.body ?? {};
+    const pickupLat = req.body?.pickupLat != null ? Number(req.body.pickupLat) : null;
+    const pickupLng = req.body?.pickupLng != null ? Number(req.body.pickupLng) : null;
+    const dropoffLat = req.body?.dropoffLat != null ? Number(req.body.dropoffLat) : null;
+    const dropoffLng = req.body?.dropoffLng != null ? Number(req.body.dropoffLng) : null;
     if (!riderId || !pickup || !dropoff || !scheduledAt) {
       return res.status(400).json({ error: "riderId, pickup, dropoff, scheduledAt are required" });
     }
     const inserted = await pool.query(
-      `insert into bookings (rider_id, pickup, dropoff, scheduled_at, status, mobility_needs, notes, created_by)
-       values ($1, $2, $3, $4, 'pending_matching', $5, $6, $7)
+      `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes, created_by)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, 'pending_matching', $9, $10, $11)
        returning id, pickup, dropoff, scheduled_at, status, created_at`,
-      [riderId, pickup, dropoff, scheduledAt, mobilityNeeds ?? null, notes ?? null, claims.sub],
+      [riderId, pickup, dropoff, pickupLat, pickupLng, dropoffLat, dropoffLng, scheduledAt, mobilityNeeds ?? null, notes ?? null, claims.sub],
     );
     const booking = inserted.rows[0] as { id: string };
     await pool.query(
@@ -576,6 +1027,48 @@ app.get("/admin/activity", async (req, res) => {
       [limit],
     );
     return res.json({ items: result.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/admin/support-tickets", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const status = String(req.query.status ?? "").trim();
+    const params: unknown[] = [];
+    let sql = `
+      select st.id, st.created_by, st.role, st.issue_type, st.reference_id, st.priority, st.message, st.status, st.created_at, st.updated_at,
+             u.email as created_by_email
+      from support_tickets st
+      left join users u on u.id = st.created_by
+    `;
+    if (status) {
+      sql += " where st.status = $1";
+      params.push(status);
+    }
+    sql += " order by st.created_at desc limit 500";
+    const rows = await pool.query(sql, params);
+    return res.json({ items: rows.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.patch("/admin/support-tickets/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const status = String(req.body?.status ?? "").trim();
+    if (!status) return res.status(400).json({ error: "status is required" });
+    const updated = await pool.query(
+      "update support_tickets set status = $2, updated_at = now() where id = $1 returning id",
+      [id, status],
+    );
+    if (!updated.rowCount) return res.status(404).json({ error: "Ticket not found" });
+    return res.json({ ok: true });
   } catch (error) {
     return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
   }
@@ -706,9 +1199,9 @@ app.put("/admin/users/:id/profile", async (req, res) => {
         [id, fullName ?? null, phone ?? null, vehicleRego ?? null],
       );
     }
-    if (roles.includes("agent")) {
+    if (roles.includes("partner")) {
       await pool.query(
-        "insert into agent_profiles (user_id, org_name, contact_name) values ($1,$2,$3) on conflict (user_id) do update set org_name=coalesce($2,agent_profiles.org_name), contact_name=coalesce($3,agent_profiles.contact_name)",
+        "insert into partner_profiles (user_id, org_name, contact_name) values ($1,$2,$3) on conflict (user_id) do update set org_name=coalesce($2,partner_profiles.org_name), contact_name=coalesce($3,partner_profiles.contact_name)",
         [id, orgName ?? null, contactName ?? fullName ?? null],
       );
     }

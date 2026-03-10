@@ -10,7 +10,7 @@ const strongPassword = z.string().min(8).refine(
 export const registerBodySchema = z.object({
   email: z.string().email(),
   password: strongPassword,
-  role: z.enum(["rider", "driver", "agent"]),
+  role: z.enum(["rider", "driver", "partner"]),
   fullName: z.string().optional(),
 });
 
@@ -34,18 +34,18 @@ export const googleAuthBodySchema = z.object({
 export const loginBodySchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
-  portal: z.enum(["rider", "driver", "agent", "admin"]).optional(),
+  portal: z.enum(["rider", "driver", "partner", "admin"]).optional(),
 });
 
 export const forgotPasswordBodySchema = z.object({
   email: z.string().email(),
-  portal: z.enum(["rider", "driver", "agent", "admin"]).optional(),
+  portal: z.enum(["rider", "driver", "partner", "admin"]).optional(),
 });
 
 export const resetPasswordBodySchema = z.object({
   token: z.string().min(1),
   password: strongPassword,
-  portal: z.enum(["rider", "driver", "agent", "admin"]).optional(),
+  portal: z.enum(["rider", "driver", "partner", "admin"]).optional(),
 });
 
 export const adminChangePasswordBodySchema = z.object({
@@ -56,7 +56,7 @@ export const adminChangePasswordBodySchema = z.object({
 export const createUserBodySchema = z.object({
   email: z.string().email(),
   password: strongPassword,
-  role: z.enum(["rider", "driver", "agent", "admin"]),
+  role: z.enum(["rider", "driver", "partner", "admin"]),
   fullName: z.string().optional(),
   phone: z.string().optional(),
   ndisId: z.string().optional(),

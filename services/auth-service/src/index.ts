@@ -27,6 +27,11 @@ const port = Number(process.env.AUTH_SERVICE_PORT ?? 4100);
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
+function normalizeRoles(rawRoles: string[]) {
+  // Keep backward compatibility with legacy "agent" users.
+  return Array.from(new Set(rawRoles.map((role) => (role === "agent" ? "partner" : role))));
+}
+
 app.get("/healthz", (_req, res) => {
   res.json({ ok: true, service: "auth-service" });
 });
@@ -39,7 +44,8 @@ app.post("/auth/register", async (req, res) => {
       return res.status(400).json({ error: msg, details: parsed.error.flatten() });
     }
 
-  const { email, password, role, fullName } = parsed.data;
+  const { email, password, fullName } = parsed.data;
+  const role = parsed.data.role === "agent" ? "partner" : parsed.data.role;
   if (role === "admin") {
     return res.status(403).json({ error: "Admin accounts cannot be created via registration. Contact super admin." });
   }
@@ -85,9 +91,9 @@ app.post("/auth/register", async (req, res) => {
       "insert into driver_profiles (user_id, full_name) values ($1, $2) on conflict (user_id) do update set full_name = coalesce(excluded.full_name, driver_profiles.full_name)",
       [userId, fullName ?? null],
     );
-  } else if (role === "agent") {
+  } else if (role === "partner") {
     await pool.query(
-      "insert into agent_profiles (user_id, contact_name) values ($1, $2) on conflict (user_id) do update set contact_name = coalesce(excluded.contact_name, agent_profiles.contact_name)",
+      "insert into partner_profiles (user_id, contact_name) values ($1, $2) on conflict (user_id) do update set contact_name = coalesce(excluded.contact_name, partner_profiles.contact_name)",
       [userId, fullName ?? null],
     );
   }
@@ -105,7 +111,8 @@ app.post("/auth/login", async (req, res) => {
     return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
   }
 
-  const { email, password, portal } = parsed.data;
+  const { email, password } = parsed.data;
+  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
   const normalizedEmail = email.toLowerCase().trim();
 
   const userRes = await pool.query(
@@ -133,11 +140,16 @@ app.post("/auth/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid credentials" });
   }
 
-  const roleRes = await pool.query(
-    "select role from user_roles where user_id = $1 order by role asc",
+  // Backfill legacy role rows at login so old partner accounts still work.
+  await pool.query(
+    `delete from user_roles
+     where user_id = $1 and role = 'agent'
+     and exists (select 1 from user_roles ur2 where ur2.user_id = $1 and ur2.role = 'partner')`,
     [user.id],
   );
-  const roles = roleRes.rows.map((r: { role: string }) => r.role as "rider" | "driver" | "agent" | "admin");
+  await pool.query("update user_roles set role = 'partner' where user_id = $1 and role = 'agent'", [user.id]);
+  const roleRes = await pool.query("select role from user_roles where user_id = $1 order by role asc", [user.id]);
+  const roles = normalizeRoles(roleRes.rows.map((r: { role: string }) => r.role)) as Array<"rider" | "driver" | "partner" | "admin">;
 
   if (portal && !roles.includes(portal)) {
     return res.status(403).json({
@@ -179,7 +191,8 @@ app.post("/auth/google", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
   }
-  const { code, redirectUri, portal } = parsed.data;
+  const { code, redirectUri } = parsed.data;
+  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
@@ -260,7 +273,7 @@ app.post("/auth/google", async (req, res) => {
     "select role from user_roles where user_id = $1 order by role asc",
     [userId],
   );
-  roles = roleRes.rows.map((r: { role: string }) => r.role);
+  roles = normalizeRoles(roleRes.rows.map((r: { role: string }) => r.role));
 
   if (!roles.includes(portal)) {
     await pool.query("insert into user_roles (user_id, role) values ($1, $2)", [userId, portal]);
@@ -290,7 +303,8 @@ app.post("/auth/send-otp", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid phone", details: parsed.error.flatten() });
   }
-  const { phone, portal } = parsed.data;
+  const { phone } = parsed.data;
+  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
   const code = crypto.randomInt(100000, 999999).toString();
   const codeHash = crypto.createHash("sha256").update(code).digest("hex");
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -301,6 +315,10 @@ app.post("/auth/send-otp", async (req, res) => {
   );
 
   await sendSms(phone, `Your Lumi Ride verification code is ${code}. Valid for 10 minutes.`);
+  // With Twilio test credentials no real SMS is sent; log code in dev so you can complete sign-in
+  if (process.env.NODE_ENV !== "production" || process.env.LOG_OTP === "true") {
+    console.log(`[OTP] ${phone} → code: ${code} (valid 10 min)`);
+  }
   return res.json({ message: "Verification code sent" });
 });
 
@@ -309,7 +327,8 @@ app.post("/auth/verify-otp", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
   }
-  const { phone, code, portal } = parsed.data;
+  const { phone, code } = parsed.data;
+  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
   const codeHash = crypto.createHash("sha256").update(code).digest("hex");
 
   const row = await pool.query(
@@ -333,7 +352,7 @@ app.post("/auth/verify-otp", async (req, res) => {
       "select role from user_roles where user_id = $1 order by role asc",
       [userId],
     );
-    roles = roleRes.rows.map((r: { role: string }) => r.role);
+    roles = normalizeRoles(roleRes.rows.map((r: { role: string }) => r.role));
     if (!roles.includes(portal)) {
       await pool.query("insert into user_roles (user_id, role) values ($1, $2)", [userId, portal]);
       roles = [...roles, portal];
@@ -382,7 +401,8 @@ app.post("/auth/forgot-password", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid email", details: parsed.error.flatten() });
   }
-  const { email, portal } = parsed.data;
+  const { email } = parsed.data;
+  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
   const normalizedEmail = email.toLowerCase().trim();
 
   const userRes = await pool.query(
@@ -415,7 +435,8 @@ app.post("/auth/reset-password", async (req, res) => {
     const first = parsed.error.errors[0];
     return res.status(400).json({ error: first?.message ?? "Invalid input", details: parsed.error.flatten() });
   }
-  const { token, password, portal } = parsed.data;
+  const { token, password } = parsed.data;
+  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
 
   const row = await pool.query(
@@ -442,7 +463,7 @@ app.post("/auth/reset-password", async (req, res) => {
     "select role from user_roles where user_id = $1 order by role asc",
     [userId],
   );
-  const roles = roleRes.rows.map((r: { role: string }) => r.role);
+  const roles = normalizeRoles(roleRes.rows.map((r: { role: string }) => r.role));
   const email = row.rows[0].email as string;
 
   if (portal && !roles.includes(portal)) {

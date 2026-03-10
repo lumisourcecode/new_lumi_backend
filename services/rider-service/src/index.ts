@@ -65,10 +65,14 @@ app.get("/rider/bookings", async (req, res) => {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["rider"]);
     const result = await pool.query(
-      `select b.id, b.pickup, b.dropoff, b.scheduled_at, b.status, b.mobility_needs, b.notes, b.created_at,
-              t.id as trip_id, t.state as trip_state, t.driver_id
+      `select b.id, b.pickup, b.dropoff, b.pickup_lat, b.pickup_lng, b.dropoff_lat, b.dropoff_lng,
+              b.scheduled_at, b.status, b.mobility_needs, b.notes, b.created_at,
+              t.id as trip_id, t.state as trip_state, t.driver_id,
+              dp.full_name as driver_name, du.email as driver_email
        from bookings b
        left join trips t on t.booking_id = b.id
+       left join users du on du.id = t.driver_id
+       left join driver_profiles dp on dp.user_id = t.driver_id
        where b.rider_id = $1
        order by b.created_at desc
        limit 200`,
@@ -110,14 +114,18 @@ app.post("/rider/bookings", async (req, res) => {
     if (!pickup || !dropoff || !scheduledAt) {
       return res.status(400).json({ error: "pickup, dropoff, scheduledAt are required" });
     }
+    const pickupLat = req.body?.pickupLat != null ? Number(req.body.pickupLat) : null;
+    const pickupLng = req.body?.pickupLng != null ? Number(req.body.pickupLng) : null;
+    const dropoffLat = req.body?.dropoffLat != null ? Number(req.body.dropoffLat) : null;
+    const dropoffLng = req.body?.dropoffLng != null ? Number(req.body.dropoffLng) : null;
     const mobilityNeeds = String(req.body?.mobilityNeeds ?? "").trim() || null;
     const notes = String(req.body?.notes ?? "").trim() || null;
 
     const inserted = await pool.query(
-      `insert into bookings (rider_id, pickup, dropoff, scheduled_at, status, mobility_needs, notes)
-       values ($1,$2,$3,$4,'pending_matching',$5,$6)
+      `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,'pending_matching',$9,$10)
        returning id, pickup, dropoff, scheduled_at, status, created_at`,
-      [claims.sub, pickup, dropoff, scheduledAt, mobilityNeeds, notes],
+      [claims.sub, pickup, dropoff, pickupLat, pickupLng, dropoffLat, dropoffLng, scheduledAt, mobilityNeeds, notes],
     );
     const booking = inserted.rows[0] as { id: string };
     await pool.query(

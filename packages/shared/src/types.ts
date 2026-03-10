@@ -1,4 +1,4 @@
-export type AppRole = "rider" | "driver" | "agent" | "admin";
+export type AppRole = "rider" | "driver" | "partner" | "admin";
 
 export type JwtClaims = {
   sub: string;

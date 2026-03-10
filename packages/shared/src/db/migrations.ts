@@ -16,7 +16,7 @@ alter table users add column if not exists created_by uuid;
 
 create table if not exists user_roles (
   user_id uuid not null references users(id) on delete cascade,
-  role text not null check (role in ('rider','driver','agent','admin')),
+  role text not null check (role in ('rider','driver','partner','admin')),
   primary key (user_id, role)
 );
 
@@ -53,6 +53,13 @@ create table if not exists agent_profiles (
   created_at timestamptz not null default now()
 );
 
+create table if not exists partner_profiles (
+  user_id uuid primary key references users(id) on delete cascade,
+  org_name text,
+  contact_name text,
+  created_at timestamptz not null default now()
+);
+
 create table if not exists admin_profiles (
   user_id uuid primary key references users(id) on delete cascade,
   display_name text,
@@ -64,6 +71,10 @@ create table if not exists bookings (
   rider_id uuid not null references users(id) on delete cascade,
   pickup text not null,
   dropoff text not null,
+  pickup_lat double precision,
+  pickup_lng double precision,
+  dropoff_lat double precision,
+  dropoff_lng double precision,
   scheduled_at timestamptz not null,
   status text not null default 'pending_matching',
   created_at timestamptz not null default now()
@@ -134,9 +145,50 @@ create table if not exists notifications (
   created_at timestamptz not null default now()
 );
 
+create table if not exists partner_clients (
+  partner_id uuid not null references users(id) on delete cascade,
+  rider_id uuid not null references users(id) on delete cascade,
+  notes text,
+  created_by uuid references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  primary key (partner_id, rider_id)
+);
+
+create table if not exists partner_travel_plans (
+  id uuid primary key default gen_random_uuid(),
+  partner_id uuid not null references users(id) on delete cascade,
+  name text not null,
+  target_group text,
+  frequency text not null default 'Weekly',
+  start_date date,
+  end_date date,
+  priority text not null default 'Medium',
+  notes text,
+  status text not null default 'Draft',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists support_tickets (
+  id uuid primary key default gen_random_uuid(),
+  created_by uuid not null references users(id) on delete cascade,
+  role text not null,
+  issue_type text not null,
+  reference_id text,
+  priority text not null default 'Normal',
+  message text not null,
+  status text not null default 'Open',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table bookings add column if not exists mobility_needs text;
 alter table bookings add column if not exists notes text;
 alter table bookings add column if not exists created_by uuid references users(id) on delete set null;
+alter table bookings add column if not exists pickup_lat double precision;
+alter table bookings add column if not exists pickup_lng double precision;
+alter table bookings add column if not exists dropoff_lat double precision;
+alter table bookings add column if not exists dropoff_lng double precision;
 alter table trips add column if not exists assigned_at timestamptz;
 alter table driver_profiles add column if not exists vehicle_make text;
 alter table driver_profiles add column if not exists vehicle_color text;
@@ -177,6 +229,18 @@ create table if not exists password_reset_tokens (
 
 alter table users add column if not exists phone text;
 alter table users add column if not exists google_id text;
+
+alter table user_roles drop constraint if exists user_roles_role_check;
+alter table user_roles add constraint user_roles_role_check check (role in ('rider','driver','partner','admin'));
+
+update user_roles set role = 'partner' where role = 'agent';
+
+insert into partner_profiles (user_id, org_name, contact_name, created_at)
+select user_id, org_name, contact_name, created_at
+from agent_profiles
+on conflict (user_id) do update set
+  org_name = coalesce(excluded.org_name, partner_profiles.org_name),
+  contact_name = coalesce(excluded.contact_name, partner_profiles.contact_name);
 
 create table if not exists phone_otps (
   id uuid primary key default gen_random_uuid(),
