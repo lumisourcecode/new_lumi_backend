@@ -90,12 +90,14 @@ jobs:
                 printf '%s' "'"${BACKEND_ENV_B64}"'" | tr -d '\r' > .env
               fi
             fi
-
+            # Override for production URLs
+            sed -i "s|^FRONTEND_URL=.*|FRONTEND_URL=https://new.lumiride.com|" .env || echo "FRONTEND_URL=https://new.lumiride.com" >> .env
+            
             # Ensure nginx routes frontend and backend on same EC2
             sudo tee /etc/nginx/sites-available/lumi-ride-dev > /dev/null << "NGINXEOF"
           server {
             listen 80;
-            server_name _;
+            server_name new.lumiride.com;
 
             location /api/ {
               proxy_pass http://127.0.0.1:4000/;
@@ -119,6 +121,12 @@ jobs:
             sudo ln -sf /etc/nginx/sites-available/lumi-ride-dev /etc/nginx/sites-enabled/lumi-ride-dev
             sudo rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
             sudo nginx -t && sudo systemctl reload nginx
+
+            # Automatically set up SSL with Certbot
+            if ! command -v certbot >/dev/null 2>&1; then
+              sudo apt-get update -qq && sudo apt-get install -y certbot python3-certbot-nginx
+            fi
+            sudo certbot --nginx -d new.lumiride.com --non-interactive --agree-tos -m admin@lumiride.com || true
 
             bash scripts/deploy-ec2.sh
             echo "Backend deploy complete."
