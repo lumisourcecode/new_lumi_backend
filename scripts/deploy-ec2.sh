@@ -12,6 +12,16 @@ echo "Deploying backend from ${BACKEND_DIR}"
 # Install deps
 npm ci
 
+# Distribute .env to all services
+if [ -f ".env" ]; then
+  for service in services/*; do
+    if [ -d "$service" ]; then
+      cp .env "$service/.env"
+      echo "Copied .env to $service"
+    fi
+  done
+fi
+
 # Start Postgres & Redis via Docker (if available)
 if command -v docker >/dev/null 2>&1; then
   sudo docker compose up -d 2>/dev/null || sudo docker-compose up -d 2>/dev/null || docker compose up -d 2>/dev/null || true
