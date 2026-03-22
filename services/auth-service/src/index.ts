@@ -19,7 +19,9 @@ import {
   signAccessToken,
   verifyOtpBodySchema,
   verifyPassword,
+  AppRole,
 } from "@lumi/shared";
+  
 
 const app = express();
 const port = Number(process.env.AUTH_SERVICE_PORT ?? 4100);
@@ -27,9 +29,9 @@ const port = Number(process.env.AUTH_SERVICE_PORT ?? 4100);
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-function normalizeRoles(rawRoles: string[]) {
+function normalizeRoles(rawRoles: string[]): AppRole[] {
   // Keep backward compatibility with legacy "agent" users.
-  return Array.from(new Set(rawRoles.map((role) => (role === "agent" ? "partner" : role))));
+  return Array.from(new Set(rawRoles.map((role) => (role === "agent" ? "partner" : role)))) as AppRole[];
 }
 
 app.get("/healthz", (_req, res) => {
@@ -40,16 +42,12 @@ app.post("/auth/register", async (req, res) => {
   try {
     const parsed = registerBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      const first = parsed.error.errors[0];
+      const first = parsed.error.issues[0];
       const msg = first?.message ?? "Invalid input";
       return res.status(400).json({ error: msg, details: parsed.error.flatten() });
     }
 
-    const { email, password, fullName } = parsed.data;
-    const role = parsed.data.role === "agent" ? "partner" : parsed.data.role;
-    if (role === "admin") {
-      return res.status(403).json({ error: "Admin accounts cannot be created via registration. Contact super admin." });
-    }
+    const { email, password, fullName, role } = parsed.data;
 
     const normalizedEmail = email.toLowerCase().trim();
     const existing = await pool.query("select id from users where email = $1", [normalizedEmail]);
@@ -99,7 +97,7 @@ app.post("/auth/register", async (req, res) => {
       );
     }
 
-    const token = signAccessToken({ sub: userId, roles, tenantId: null });
+    const token = signAccessToken({ sub: userId, roles: roles as AppRole[], tenantId: null });
     return res.status(201).json({
       accessToken: token,
       user: { id: userId, email: normalizedEmail, roles },
@@ -117,8 +115,7 @@ app.post("/auth/login", async (req, res) => {
       return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
     }
 
-    const { email, password } = parsed.data;
-    const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
+    const { email, password, portal } = parsed.data;
     const normalizedEmail = email.toLowerCase().trim();
 
     const userRes = await pool.query(
@@ -204,8 +201,7 @@ app.post("/auth/google", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
   }
-  const { code, redirectUri } = parsed.data;
-  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
+  const { code, redirectUri, portal } = parsed.data;
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
@@ -304,7 +300,7 @@ app.post("/auth/google", async (req, res) => {
     }
   }
 
-  const token = signAccessToken({ sub: userId, roles, tenantId: null });
+  const token = signAccessToken({ sub: userId, roles: roles as AppRole[], tenantId: null });
   return res.json({
     accessToken: token,
     user: { id: userId, email: normalizedEmail, roles },
@@ -316,8 +312,7 @@ app.post("/auth/send-otp", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid phone", details: parsed.error.flatten() });
   }
-  const { phone } = parsed.data;
-  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
+  const { phone, portal } = parsed.data;
   const code = crypto.randomInt(100000, 999999).toString();
   const codeHash = crypto.createHash("sha256").update(code).digest("hex");
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -340,8 +335,7 @@ app.post("/auth/verify-otp", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
   }
-  const { phone, code } = parsed.data;
-  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
+  const { phone, code, portal } = parsed.data;
   const codeHash = crypto.createHash("sha256").update(code).digest("hex");
 
   const row = await pool.query(
@@ -402,7 +396,7 @@ app.post("/auth/verify-otp", async (req, res) => {
   const emailRes = await pool.query("select email from users where id = $1", [userId]);
   const email = emailRes.rows[0]?.email as string;
 
-  const token = signAccessToken({ sub: userId, roles, tenantId: null });
+  const token = signAccessToken({ sub: userId, roles: roles as AppRole[], tenantId: null });
   return res.json({
     accessToken: token,
     user: { id: userId, email, roles },
@@ -414,8 +408,7 @@ app.post("/auth/forgot-password", async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid email", details: parsed.error.flatten() });
   }
-  const { email } = parsed.data;
-  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
+  const { email, portal } = parsed.data;
   const normalizedEmail = email.toLowerCase().trim();
 
   const userRes = await pool.query(
@@ -445,11 +438,10 @@ app.post("/auth/forgot-password", async (req, res) => {
 app.post("/auth/reset-password", async (req, res) => {
   const parsed = resetPasswordBodySchema.safeParse(req.body);
   if (!parsed.success) {
-    const first = parsed.error.errors[0];
+    const first = parsed.error.issues[0];
     return res.status(400).json({ error: first?.message ?? "Invalid input", details: parsed.error.flatten() });
   }
-  const { token, password } = parsed.data;
-  const portal = parsed.data.portal === "agent" ? "partner" : parsed.data.portal;
+  const { token, password, portal } = parsed.data;
   const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
 
   const row = await pool.query(
@@ -485,7 +477,7 @@ app.post("/auth/reset-password", async (req, res) => {
     });
   }
 
-  const accessToken = signAccessToken({ sub: userId, roles, tenantId: null });
+  const accessToken = signAccessToken({ sub: userId, roles: roles as AppRole[], tenantId: null });
   return res.json({
     accessToken,
     user: { id: userId, email, roles },

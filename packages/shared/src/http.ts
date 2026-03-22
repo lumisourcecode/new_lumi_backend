@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { AppRole, JwtClaims } from "./types";
-import { verifyAccessToken } from "./auth";
+import type { AppRole, JwtClaims } from "./types.js";
+import { verifyAccessToken } from "./auth.js";
 
 const strongPassword = z.string().min(8).refine(
   (p) => /[a-z]/.test(p) && /[A-Z]/.test(p) && /\d/.test(p) && /[#$&@!%*?^+=._-]/.test(p),
@@ -10,32 +10,47 @@ const strongPassword = z.string().min(8).refine(
 export const registerBodySchema = z.object({
   email: z.string().email(),
   password: strongPassword,
-  role: z.enum(["rider", "driver", "partner"]),
+  role: z.enum(["rider", "driver", "partner", "agent"]),
   fullName: z.string().optional(),
-});
+}).transform((data) => ({
+  ...data,
+  role: data.role === "agent" ? "partner" : data.role,
+}));
 
 export const sendOtpBodySchema = z.object({
   phone: z.string().min(10).max(20),
-  portal: z.enum(["rider", "driver"]),
-});
+  portal: z.enum(["rider", "driver", "agent"]),
+}).transform((data) => ({
+  ...data,
+  portal: data.portal === "agent" ? "partner" : data.portal,
+}));
 
 export const verifyOtpBodySchema = z.object({
   phone: z.string().min(10).max(20),
   code: z.string().length(6),
-  portal: z.enum(["rider", "driver"]),
-});
+  portal: z.enum(["rider", "driver", "agent"]),
+}).transform((data) => ({
+  ...data,
+  portal: data.portal === "agent" ? "partner" : data.portal,
+}));
 
 export const googleAuthBodySchema = z.object({
   code: z.string().min(1),
   redirectUri: z.string().url(),
-  portal: z.enum(["rider", "driver"]),
-});
+  portal: z.enum(["rider", "driver", "agent"]),
+}).transform((data) => ({
+  ...data,
+  portal: data.portal === "agent" ? "partner" : data.portal,
+}));
 
 export const loginBodySchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
-  portal: z.enum(["rider", "driver", "partner", "admin"]).optional(),
-});
+  portal: z.enum(["rider", "driver", "partner", "admin", "agent"]).optional(),
+}).transform((data) => ({
+  ...data,
+  portal: data.portal === "agent" ? "partner" : data.portal,
+}));
 
 export const forgotPasswordBodySchema = z.object({
   email: z.string().email(),
@@ -79,7 +94,7 @@ export function requireAuth(authHeader?: string): JwtClaims {
 
 export function requireRole(claims: JwtClaims, roles: AppRole[]) {
   if (claims.roles.includes("admin")) return;
-  const allowed = claims.roles.some((r) => roles.includes(r));
+  const allowed = claims.roles.some((r: AppRole) => roles.includes(r));
   if (!allowed) throw new Error("Forbidden");
 }
 
