@@ -1,8 +1,13 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-
-import { pool, requireAuth, requireRole } from "@lumi/shared";
+import { 
+  pool, 
+  requireAuth, 
+  requireRole, 
+  calculateEstimatedPrice, 
+  calculateHaversineDistance 
+} from "@lumi/shared";
 
 const app = express();
 const port = Number(process.env.RIDER_SERVICE_PORT ?? 4200);
@@ -66,8 +71,8 @@ app.get("/rider/bookings", async (req, res) => {
     requireRole(claims, ["rider"]);
     const result = await pool.query(
       `select b.id, b.pickup, b.dropoff, b.pickup_lat, b.pickup_lng, b.dropoff_lat, b.dropoff_lng,
-              b.scheduled_at, b.status, b.mobility_needs, b.notes, b.created_at,
-              t.id as trip_id, t.state as trip_state, t.driver_id,
+              b.scheduled_at, b.status, b.mobility_needs, b.notes, b.created_at, b.is_ndis,
+              t.id as trip_id, t.state as trip_state, t.driver_id, t.estimated_cost, t.distance_km,
               dp.full_name as driver_name, du.email as driver_email
        from bookings b
        left join trips t on t.booking_id = b.id
@@ -79,6 +84,102 @@ app.get("/rider/bookings", async (req, res) => {
       [claims.sub],
     );
     return res.json({ items: result.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.post("/rider/bookings", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["rider"]);
+
+    const { 
+      pickup, 
+      dropoff, 
+      scheduledAt, 
+      pickupLat, 
+      pickupLng, 
+      dropoffLat, 
+      dropoffLng, 
+      mobilityNeeds, 
+      notes,
+      isNdis
+    } = req.body ?? {};
+
+    if (!pickup || !dropoff || !scheduledAt) {
+      return res.status(400).json({ error: "pickup, dropoff, and scheduledAt are required" });
+    }
+
+    // Phase 4: Intelligent Pricing (Australia/NDIS)
+    let distanceEst = 5.0; // Standard urban short trip fallback
+    if (pickupLat && pickupLng && dropoffLat && dropoffLng) {
+      distanceEst = calculateHaversineDistance(pickupLat, pickupLng, dropoffLat, dropoffLng) * 1.35; // Proxy for road distance
+    }
+
+    const isAccessible = mobilityNeeds?.toLowerCase().includes("wheelchair") || mobilityNeeds?.toLowerCase().includes("hoist");
+    const pricing = calculateEstimatedPrice({
+      distanceKm: distanceEst,
+      durationMinutes: distanceEst * 2.5, // Approx 24km/h urban average with stops
+      vehicleType: isAccessible ? "accessible" : "standard",
+      isNdis: !!isNdis
+    });
+
+    const inserted = await pool.query(
+      `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes, is_ndis, vehicle_type_needed)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,'pending_matching',$9,$10,$11,$12)
+       returning id, pickup, dropoff, scheduled_at, status, created_at`,
+      [
+        claims.sub, pickup, dropoff, 
+        pickupLat || null, pickupLng || null, 
+        dropoffLat || null, dropoffLng || null, 
+        scheduledAt, mobilityNeeds || null, notes || null, 
+        !!isNdis, isAccessible ? "accessible" : "standard"
+      ],
+    );
+    const booking = inserted.rows[0] as { id: string };
+
+    // Create Trip with estimated cost
+    await pool.query(
+      `insert into trips (booking_id, state, estimated_cost, final_cost, distance_km, duration_minutes) 
+       values ($1, 'pending_assignment', $2, $2, $3, $4)`,
+      [booking.id, pricing.total, distanceEst, Math.round(distanceEst * 2.5)],
+    );
+
+    // Phase 4: Nearby Proximity Dispatch (5km Radius)
+    const activeDrivers = await pool.query(
+      `select dp.user_id, dp.last_lat, dp.last_lng from driver_profiles dp
+       where dp.verification_status = 'Approved'`
+    );
+
+    const notifications = [];
+    for (const driver of activeDrivers.rows) {
+      const dist = (driver.last_lat && driver.last_lng && pickupLat && pickupLng)
+        ? calculateHaversineDistance(driver.last_lat, driver.last_lng, pickupLat, pickupLng)
+        : null;
+
+      // Notify if within 5km, or if coordinates are missing (global broadcast as fallback)
+      if (dist === null || dist <= 5.0) {
+        notifications.push(pool.query(
+          "insert into notifications (recipient_id, type, payload) values ($1, 'new_ride_request', $2)",
+          [driver.user_id, JSON.stringify({ 
+            bookingId: booking.id, 
+            pickup, 
+            dropoff, 
+            scheduledAt, 
+            price: pricing.total,
+            distance: distanceEst.toFixed(1) + "km"
+          })]
+        ));
+      }
+    }
+    
+    await Promise.all(notifications);
+
+    return res.status(201).json({ 
+      booking: inserted.rows[0], 
+      estimatedPrice: pricing 
+    });
   } catch (error) {
     return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
   }
@@ -103,52 +204,6 @@ app.patch("/rider/bookings/:id", async (req, res) => {
   }
 });
 
-app.post("/rider/bookings", async (req, res) => {
-  try {
-    const claims = requireAuth(req.headers.authorization);
-    requireRole(claims, ["rider"]);
-
-    const pickup = String(req.body?.pickup ?? "").trim();
-    const dropoff = String(req.body?.dropoff ?? "").trim();
-    const scheduledAt = String(req.body?.scheduledAt ?? "").trim();
-    if (!pickup || !dropoff || !scheduledAt) {
-      return res.status(400).json({ error: "pickup, dropoff, scheduledAt are required" });
-    }
-    const pickupLat = req.body?.pickupLat != null ? Number(req.body.pickupLat) : null;
-    const pickupLng = req.body?.pickupLng != null ? Number(req.body.pickupLng) : null;
-    const dropoffLat = req.body?.dropoffLat != null ? Number(req.body.dropoffLat) : null;
-    const dropoffLng = req.body?.dropoffLng != null ? Number(req.body.dropoffLng) : null;
-    const mobilityNeeds = String(req.body?.mobilityNeeds ?? "").trim() || null;
-    const notes = String(req.body?.notes ?? "").trim() || null;
-
-    const inserted = await pool.query(
-      `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,'pending_matching',$9,$10)
-       returning id, pickup, dropoff, scheduled_at, status, created_at`,
-      [claims.sub, pickup, dropoff, pickupLat, pickupLng, dropoffLat, dropoffLng, scheduledAt, mobilityNeeds, notes],
-    );
-    const booking = inserted.rows[0] as { id: string };
-    await pool.query(
-      "insert into trips (booking_id, state) values ($1, 'pending_assignment')",
-      [booking.id],
-    );
-    const drivers = await pool.query(
-      `select u.id from users u
-       join user_roles ur on ur.user_id = u.id and ur.role = 'driver'
-       join driver_profiles dp on dp.user_id = u.id and dp.verification_status = 'Approved'`,
-    );
-    for (const d of drivers.rows) {
-      await pool.query(
-        "insert into notifications (recipient_id, type, payload) values ($1, 'new_ride_request', $2)",
-        [d.id, JSON.stringify({ bookingId: booking.id, pickup, dropoff, scheduledAt })],
-      );
-    }
-    return res.status(201).json({ booking: inserted.rows[0] });
-  } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
-  }
-});
-
 app.get("/rider/notifications", async (req, res) => {
   try {
     const claims = requireAuth(req.headers.authorization);
@@ -164,19 +219,6 @@ app.get("/rider/notifications", async (req, res) => {
   }
 });
 
-app.patch("/rider/notifications/:id/read", async (req, res) => {
-  try {
-    const claims = requireAuth(req.headers.authorization);
-    requireRole(claims, ["rider"]);
-    const { id } = req.params;
-    await pool.query("update notifications set read_at = now() where id = $1 and recipient_id = $2", [id, claims.sub]);
-    return res.json({ ok: true });
-  } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
-  }
-});
-
 app.listen(port, () => {
   console.log(`rider-service listening on ${port}`);
 });
-
