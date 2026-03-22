@@ -39,7 +39,10 @@ app.get("/rider/profile", async (req, res) => {
       ndisId: row.ndis_id ?? "",
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[rider-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -61,7 +64,10 @@ app.patch("/rider/profile", async (req, res) => {
     );
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[rider-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -85,7 +91,10 @@ app.get("/rider/bookings", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[rider-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -181,7 +190,10 @@ app.post("/rider/bookings", async (req, res) => {
       estimatedPrice: pricing 
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[rider-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -200,7 +212,10 @@ app.patch("/rider/bookings/:id", async (req, res) => {
     await pool.query("update trips set state = 'Cancelled' where booking_id = $1", [id]);
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[rider-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -215,7 +230,10 @@ app.get("/rider/notifications", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[rider-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 

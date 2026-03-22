@@ -64,7 +64,10 @@ app.get("/admin/users", async (req, res) => {
     const users = await pool.query(sql, params);
     return res.json({ items: users.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -157,7 +160,10 @@ app.get("/admin/search", async (req, res) => {
       documents: documents.rows,
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -212,7 +218,10 @@ app.get("/admin/users/:id", async (req, res) => {
       partnerClientsCount: Number(partnerClientsCount.rows[0]?.c ?? 0),
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -242,7 +251,10 @@ app.get("/admin/users/:id/history", async (req, res) => {
     );
     return res.json({ bookings: bookings.rows, trips: trips.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -257,7 +269,10 @@ app.get("/admin/users/:id/documents", async (req, res) => {
     );
     return res.json({ items: docs.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -276,7 +291,10 @@ app.get("/admin/users/:id/activity", async (req, res) => {
     );
     return res.json({ items: rows.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -305,7 +323,10 @@ app.get("/admin/users/:id/relationships", async (req, res) => {
     );
     return res.json({ partnerClients: partnerClients.rows, riderPartners: riderPartners.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -325,7 +346,10 @@ app.post("/admin/partners/:id/clients", async (req, res) => {
     );
     return res.status(201).json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -337,7 +361,10 @@ app.delete("/admin/partners/:id/clients/:riderId", async (req, res) => {
     await pool.query("delete from partner_clients where partner_id = $1 and rider_id = $2", [id, riderId]);
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -417,7 +444,10 @@ app.post("/admin/users", async (req, res) => {
       user: { id: userId, email: normalizedEmail, roles },
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -436,7 +466,10 @@ app.get("/admin/riders", async (req, res) => {
     );
     return res.json({ items: users.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -454,7 +487,10 @@ app.get("/admin/drivers", async (req, res) => {
     );
     return res.json({ items: users.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -465,7 +501,10 @@ app.get("/admin/partners", async (req, res) => {
     const users = await pool.query(PARTNER_LIST_SQL);
     return res.json({ items: users.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -477,7 +516,10 @@ app.get("/admin/agents", async (req, res) => {
     const users = await pool.query(PARTNER_LIST_SQL);
     return res.json({ items: users.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -511,7 +553,10 @@ app.get("/admin/partners/:id/overview", async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -536,7 +581,10 @@ app.patch("/admin/partners/:id", async (req, res) => {
     }
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -558,7 +606,10 @@ app.get("/admin/partners/:id/bookings", async (req, res) => {
     );
     return res.json({ items: rows.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -577,7 +628,10 @@ app.get("/admin/partners/:id/plans", async (req, res) => {
     );
     return res.json({ items: rows.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -606,7 +660,10 @@ app.post("/admin/partners/:id/plans", async (req, res) => {
     );
     return res.status(201).json({ id: created.rows[0]?.id });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -644,7 +701,10 @@ app.patch("/admin/partners/:id/plans/:planId", async (req, res) => {
     if (!updated.rowCount) return res.status(404).json({ error: "Plan not found" });
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -656,7 +716,10 @@ app.delete("/admin/partners/:id/plans/:planId", async (req, res) => {
     await pool.query("delete from partner_travel_plans where id = $1 and partner_id = $2", [planId, id]);
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -675,7 +738,10 @@ app.get("/admin/partners/:id/support-tickets", async (req, res) => {
     );
     return res.json({ items: rows.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -711,7 +777,10 @@ app.post("/admin/users/:id/change-password", async (req, res) => {
 
     return res.json({ ok: true, message: sendEmail ? "Password updated and email sent." : "Password updated." });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -734,7 +803,10 @@ app.patch("/admin/users/:id", async (req, res) => {
     await pool.query("update users set is_active = $1 where id = $2", [is_active, id]);
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -747,7 +819,10 @@ app.get("/admin/driver-interest", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -779,7 +854,10 @@ app.get("/admin/enrollments", async (req, res) => {
     }
     return res.json({ items });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -827,7 +905,10 @@ app.patch("/admin/enrollments/:id", async (req, res) => {
     }
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -854,7 +935,10 @@ app.patch("/admin/bookings/:id", async (req, res) => {
     );
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -881,7 +965,10 @@ app.patch("/admin/trips/:id/state", async (req, res) => {
     }
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -906,7 +993,10 @@ app.get("/admin/bookings", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -958,7 +1048,10 @@ app.post("/admin/bookings", async (req, res) => {
     }
     return res.status(201).json({ booking: inserted.rows[0] });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -987,7 +1080,10 @@ app.patch("/admin/trips/:id/assign", async (req, res) => {
     );
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1008,7 +1104,10 @@ app.get("/admin/trips", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1028,7 +1127,10 @@ app.get("/admin/activity", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1052,7 +1154,10 @@ app.get("/admin/support-tickets", async (req, res) => {
     const rows = await pool.query(sql, params);
     return res.json({ items: rows.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1070,7 +1175,10 @@ app.patch("/admin/support-tickets/:id", async (req, res) => {
     if (!updated.rowCount) return res.status(404).json({ error: "Ticket not found" });
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1093,7 +1201,10 @@ app.get("/admin/stats", async (req, res) => {
       activeTripsCount: Number(activeTrips.rows[0]?.c ?? 0),
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1119,7 +1230,10 @@ app.get("/admin/billing", async (req, res) => {
       completedTripsCount: Number(stats.rows[0]?.c ?? 0),
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1148,7 +1262,10 @@ app.get("/admin/compliance", async (req, res) => {
       expiringSoonCount: Number(expiring.rows[0]?.c ?? 0),
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1175,7 +1292,10 @@ app.get("/admin/reports/summary", async (req, res) => {
       activityLast7Days: Number(row?.activity_7d ?? 0),
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1213,7 +1333,10 @@ app.put("/admin/users/:id/profile", async (req, res) => {
     }
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -1236,7 +1359,10 @@ app.post("/admin/documents/:docId/verify", async (req, res) => {
     );
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 

@@ -43,7 +43,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       const row = result.rows[0] as { email: string; org_name: string | null; contact_name: string | null };
       return res.json({ email: row.email, orgName: row.org_name ?? "", contactName: row.contact_name ?? "" });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -63,7 +66,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.json({ ok: true });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -96,7 +102,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
         pendingApprovals: Number(pending.rows[0]?.count ?? 0),
       });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -122,7 +131,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.json({ items: result.rows });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -143,7 +155,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.json({ items: result.rows });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -163,7 +178,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.json({ items: result.rows });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -211,7 +229,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.status(201).json({ riderId: finalRiderId });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -240,7 +261,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.json({ ok: true });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -252,7 +276,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       await pool.query("delete from partner_clients where partner_id = $1 and rider_id = $2", [claims.sub, riderId]);
       return res.json({ ok: true });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -302,7 +329,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       }
       return res.status(201).json({ booking: inserted.rows[0] });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -319,7 +349,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.json({ items: rows.rows });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -348,7 +381,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.status(201).json({ plan: inserted.rows[0] });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -386,7 +422,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       if (!updated.rowCount) return res.status(404).json({ error: "Plan not found" });
       return res.json({ ok: true });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -398,7 +437,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       await pool.query("delete from partner_travel_plans where id = $1 and partner_id = $2", [id, claims.sub]);
       return res.json({ ok: true });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -415,7 +457,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.json({ items: rows.rows });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -442,7 +487,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.status(201).json({ ticket: inserted.rows[0] });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -457,7 +505,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       return res.json({ items: result.rows });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 
@@ -469,7 +520,10 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       await pool.query("update notifications set read_at = now() where id = $1 and recipient_id = $2", [id, claims.sub]);
       return res.json({ ok: true });
     } catch (error) {
-      return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
     }
   });
 }

@@ -52,7 +52,10 @@ app.post("/driver/location", async (req, res) => {
     );
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -72,7 +75,10 @@ app.get("/driver/profile", async (req, res) => {
     const row = result.rows[0];
     return res.json(row);
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -92,7 +98,10 @@ app.get("/driver/earnings", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -124,7 +133,10 @@ app.get("/driver/stats", async (req, res) => {
       totalEarnings: Number(totalEarnings.rows[0]?.s ?? 0),
     });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -145,7 +157,10 @@ app.get("/driver/manifest", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -184,7 +199,10 @@ app.get("/driver/available-trips", async (req, res) => {
 
     return res.json({ items: itemsWithDist });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -208,7 +226,10 @@ app.post("/driver/trips/:tripId/accept", async (req, res) => {
 
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 

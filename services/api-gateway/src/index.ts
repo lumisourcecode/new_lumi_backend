@@ -11,6 +11,7 @@ const riderTarget = `http://localhost:${process.env.RIDER_SERVICE_PORT ?? 4200}`
 const driverTarget = `http://localhost:${process.env.DRIVER_SERVICE_PORT ?? 4300}`;
 const partnerTarget = `http://localhost:${process.env.PARTNER_SERVICE_PORT ?? process.env.AGENT_SERVICE_PORT ?? 4400}`;
 const adminTarget = `http://localhost:${process.env.ADMIN_SERVICE_PORT ?? 4500}`;
+const billingTarget = `http://localhost:${process.env.BILLING_SERVICE_PORT ?? 4600}`;
 
 app.use(cors({ origin: true, credentials: true }));
 // Do NOT use express.json() - it consumes the body and breaks proxy forwarding of POST/PUT
@@ -76,6 +77,15 @@ app.use(
     target: adminTarget,
     changeOrigin: true,
     pathRewrite: { "^/": "/admin/" },
+  }),
+);
+
+app.use(
+  "/billing",
+  createProxyMiddleware({
+    target: billingTarget,
+    changeOrigin: true,
+    pathRewrite: { "^/": "/billing/" },
   }),
 );
 
