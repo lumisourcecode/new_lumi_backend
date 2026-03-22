@@ -183,8 +183,10 @@ app.get("/auth/me", async (req, res) => {
       user: { id: userRes.rows[0].id as string, email: userRes.rows[0].email as string, roles: claims.roles },
     });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : "Unauthorized";
     console.error("[auth-service] /me error:", error);
-    return res.status(401).json({ error: "Unauthorized" });
+    const status = msg === "Unauthorized" ? 401 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 

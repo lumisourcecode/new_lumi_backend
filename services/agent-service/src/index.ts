@@ -541,7 +541,10 @@ app.get("/partner/billing", async (req, res) => {
     );
     return res.json(result.rows[0] || { auto_invoice: true, invoice_frequency: 'immediate' });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[partner-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -565,7 +568,10 @@ app.patch("/partner/billing", async (req, res) => {
     );
     return res.json({ ok: true });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[partner-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
@@ -582,7 +588,10 @@ app.get("/partner/invoices", async (req, res) => {
     );
     return res.json({ items: result.rows });
   } catch (error) {
-    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[partner-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
   }
 });
 
