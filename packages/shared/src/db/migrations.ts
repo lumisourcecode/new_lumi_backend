@@ -250,6 +250,19 @@ create table if not exists phone_otps (
   expires_at timestamptz not null,
   created_at timestamptz not null default now()
 );
+alter table driver_profiles add column if not exists last_lat double precision;
+alter table driver_profiles add column if not exists last_lng double precision;
+alter table driver_profiles add column if not exists last_ping_at timestamptz;
+
+alter table bookings add column if not exists vehicle_type_needed text default 'standard';
+alter table bookings add column if not exists is_ndis boolean default false;
+
+alter table trips add column if not exists estimated_cost numeric(12,2);
+alter table trips add column if not exists final_cost numeric(12,2);
+alter table trips add column if not exists currency text default 'AUD';
+alter table trips add column if not exists ndis_support_item text;
+alter table trips add column if not exists distance_km numeric(10,2);
+alter table trips add column if not exists duration_minutes integer;
 `;
 
 export async function runMigrations() {
