@@ -7,7 +7,7 @@
     "services/*"
   ],
   "scripts": {
-    "dev": "dotenv -e .env -- concurrently -n gateway,auth,rider,driver,partner,admin -c blue,green,magenta,cyan,yellow,red \"npm:dev -w @lumi/api-gateway\" \"npm:dev -w @lumi/auth-service\" \"npm:dev -w @lumi/rider-service\" \"npm:dev -w @lumi/driver-service\" \"npm:dev -w @lumi/agent-service\" \"npm:dev -w @lumi/admin-service\"",
+    "dev": "dotenv -e .env -- concurrently -n gateway,auth,rider,driver,partner,admin,billing -c blue,green,magenta,cyan,yellow,red,white \"npm:dev -w @lumi/api-gateway\" \"npm:dev -w @lumi/auth-service\" \"npm:dev -w @lumi/rider-service\" \"npm:dev -w @lumi/driver-service\" \"npm:dev -w @lumi/agent-service\" \"npm:dev -w @lumi/admin-service\" \"npm:dev -w @lumi/billing-service\"",
     "db:init": "npm run db:init -w @lumi/shared"
   },
   "devDependencies": {

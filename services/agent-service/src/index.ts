@@ -477,6 +477,61 @@ function registerRoutes(prefix: "/partner" | "/agent") {
 registerRoutes("/partner");
 registerRoutes("/agent");
 
+app.get("/partner/billing", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["partner"]);
+    const result = await pool.query(
+      "select * from partner_billing_settings where partner_id = $1",
+      [claims.sub]
+    );
+    return res.json(result.rows[0] || { auto_invoice: true, invoice_frequency: 'immediate' });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.patch("/partner/billing", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["partner"]);
+    const { autoInvoice, frequency, billingEmail, abn, gstRegistered } = req.body ?? {};
+    
+    await pool.query(
+      `insert into partner_billing_settings (partner_id, auto_invoice, invoice_frequency, billing_email, abn, gst_registered)
+       values ($1, $2, $3, $4, $5, $6)
+       on conflict (partner_id) do update set
+         auto_invoice = excluded.auto_invoice,
+         invoice_frequency = excluded.invoice_frequency,
+         billing_email = excluded.billing_email,
+         abn = excluded.abn,
+         gst_registered = excluded.gst_registered,
+         updated_at = now()`,
+      [claims.sub, autoInvoice ?? true, frequency ?? 'immediate', billingEmail || null, abn || null, gstRegistered ?? true]
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
+app.get("/partner/invoices", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["partner"]);
+    const result = await pool.query(
+      `select i.*, rp.full_name as client_name from invoices i
+       join partner_clients pc on pc.rider_id = i.recipient_id and pc.partner_id = $1
+       left join rider_profiles rp on rp.user_id = i.recipient_id
+       order by i.created_at desc limit 100`,
+      [claims.sub]
+    );
+    return res.json({ items: result.rows });
+  } catch (error) {
+    return res.status(401).json({ error: error instanceof Error ? error.message : "Unauthorized" });
+  }
+});
+
 app.listen(port, () => {
   console.log(`partner-service listening on ${port}`);
 });

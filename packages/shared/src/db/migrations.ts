@@ -1,4 +1,4 @@
-import { pool } from "./client";
+import { pool } from "./client.js";
 
 const migrationSql = `
 create extension if not exists "pgcrypto";
@@ -263,6 +263,48 @@ alter table trips add column if not exists currency text default 'AUD';
 alter table trips add column if not exists ndis_support_item text;
 alter table trips add column if not exists distance_km numeric(10,2);
 alter table trips add column if not exists duration_minutes integer;
+
+create table if not exists invoices (
+  id uuid primary key default gen_random_uuid(),
+  invoice_number text unique not null,
+  owner_id uuid not null references users(id) on delete cascade,
+  recipient_id uuid not null references users(id) on delete cascade,
+  trip_id uuid references trips(id) on delete set null,
+  issue_date date not null default current_date,
+  due_date date,
+  status text not null default 'draft' check (status in ('draft','sent','paid','cancelled','void')),
+  total_amount numeric(12,2) not null default 0,
+  tax_amount numeric(12,2) not null default 0,
+  currency text not null default 'AUD',
+  pdf_url text,
+  xero_id text,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists invoice_items (
+  id uuid primary key default gen_random_uuid(),
+  invoice_id uuid not null references invoices(id) on delete cascade,
+  description text not null,
+  ndis_support_item text,
+  quantity numeric(10,2) not null default 1,
+  unit_price numeric(12,2) not null,
+  total_price numeric(12,2) not null,
+  tax_rate numeric(5,2) not null default 0
+);
+
+create table if not exists partner_billing_settings (
+  partner_id uuid primary key references users(id) on delete cascade,
+  auto_invoice boolean not null default true,
+  invoice_frequency text not null default 'immediate' check (invoice_frequency in ('immediate','weekly','monthly')),
+  billing_email text,
+  abn text,
+  gst_registered boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+
+alter table invoices add column if not exists partner_id uuid references users(id) on delete set null;
 `;
 
 export async function runMigrations() {
