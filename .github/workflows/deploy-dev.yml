@@ -86,7 +86,10 @@ jobs:
             export DEBIAN_FRONTEND=noninteractive
             sudo journalctl --vacuum-time=2d >/dev/null 2>&1 || true
             sudo apt-get clean >/dev/null 2>&1 || true
+            sudo rm -f /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* >/dev/null 2>&1 || true
+            sudo rm -f /var/lib/snapd/snaps/*.partial >/dev/null 2>&1 || true
             sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* >/dev/null 2>&1 || true
+            sudo dpkg --configure -a >/dev/null 2>&1 || true
             sudo docker system prune -af >/dev/null 2>&1 || true
             rm -rf ~/.npm/_cacache ~/.cache ~/.cache/puppeteer >/dev/null 2>&1 || true
             if ! command -v node >/dev/null 2>&1; then

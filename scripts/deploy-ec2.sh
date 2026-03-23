@@ -15,7 +15,10 @@ lumi_cleanup_disk() {
   df -h .
   sudo journalctl --vacuum-time=2d >/dev/null 2>&1 || true
   sudo apt-get clean >/dev/null 2>&1 || true
+  sudo rm -f /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/* >/dev/null 2>&1 || true
+  sudo rm -f /var/lib/snapd/snaps/*.partial >/dev/null 2>&1 || true
   sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* >/dev/null 2>&1 || true
+  sudo dpkg --configure -a >/dev/null 2>&1 || true
   sudo docker system prune -af >/dev/null 2>&1 || true
   rm -rf ~/.npm/_cacache ~/.cache ~/.cache/puppeteer "${HOME}/.cache/puppeteer" >/dev/null 2>&1 || true
   echo "Disk after cleanup:"
@@ -36,15 +39,8 @@ ensure_chromium_for_puppeteer() {
   if command -v chromium >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 || command -v chromium-browser >/dev/null 2>&1; then
     return 0
   fi
-  echo "Installing Chromium for invoice PDFs (Puppeteer)..."
-  if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get clean >/dev/null 2>&1 || true
-    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* >/dev/null 2>&1 || true
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser 2>/dev/null \
-      || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y chromium 2>/dev/null \
-      || echo "WARNING: Could not apt-install Chromium; install it manually for PDF invoices." >&2
-  fi
+  echo "WARNING: No system Chromium/Chrome found. Skipping install during deploy to avoid ENOSPC on small disks." >&2
+  echo "WARNING: Invoice PDF generation may fail until Chromium is installed manually or disk is increased." >&2
 }
 ensure_chromium_for_puppeteer
 
