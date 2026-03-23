@@ -1,0 +1,96 @@
+# Push to `dev` → rsync backend to EC2 → docker compose + PM2 (scripts/deploy-ec2.sh)
+#
+# Repo: e.g. lumisourcecode/new_lumi_backend (root = this backend folder)
+#
+# GitHub → Settings → Secrets and variables → Actions
+#   Secrets: EC2_HOST, EC2_USER, EC2_SSH_KEY or EC2_SSH_KEY_B64, BACKEND_ENV_B64
+#   Variables: BACKEND_EC2_PATH (e.g. /var/www/lumi-ride-backend)
+#
+name: Deploy backend to EC2
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-backend-ec2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Backend → EC2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write .env from BACKEND_ENV_B64
+        env:
+          BACKEND_ENV_B64: ${{ secrets.BACKEND_ENV_B64 }}
+        run: |
+          set -e
+          test -n "${BACKEND_ENV_B64}" || { echo "Add secret BACKEND_ENV_B64 (base64 of your backend .env)" >&2; exit 1; }
+          echo "${BACKEND_ENV_B64}" | base64 -d > .env
+          test -s .env || { echo "Decoded .env is empty" >&2; exit 1; }
+
+      - name: Configure SSH key
+        env:
+          EC2_SSH_KEY_B64: ${{ secrets.EC2_SSH_KEY_B64 }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          if [ -n "$EC2_SSH_KEY_B64" ]; then
+            printf '%s' "$EC2_SSH_KEY_B64" | base64 -d | tr -d '\r' > ~/.ssh/id_rsa
+          elif [ -n "$EC2_SSH_KEY" ]; then
+            printf '%s' "$EC2_SSH_KEY" | tr -d '\r' > ~/.ssh/id_rsa
+          else
+            echo "Missing EC2_SSH_KEY_B64 or EC2_SSH_KEY" >&2
+            exit 1
+          fi
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keygen -y -f ~/.ssh/id_rsa >/dev/null
+
+      - name: Deploy to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_BACKEND_APP_DIR: ${{ vars.BACKEND_EC2_PATH }}
+        run: |
+          set -e
+          test -n "${EC2_HOST}" && test -n "${EC2_USER}" || { echo "Set secrets EC2_HOST and EC2_USER" >&2; exit 1; }
+          test -n "${EC2_BACKEND_APP_DIR}" || { echo "Set repository variable BACKEND_EC2_PATH (e.g. /var/www/lumi-ride-backend)" >&2; exit 1; }
+          ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" "mkdir -p '${EC2_BACKEND_APP_DIR}'"
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude 'services/*/node_modules' \
+            --exclude 'packages/*/node_modules' \
+            -e "ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20" \
+            ./ "${EC2_USER}@${EC2_HOST}:${EC2_BACKEND_APP_DIR}/"
+          ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" "
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            if ! command -v node >/dev/null 2>&1; then
+              curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs
+            fi
+            command -v pm2 >/dev/null 2>&1 || sudo npm i -g pm2
+            command -v docker >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y docker.io)
+            if ! sudo swapon --show 2>/dev/null | grep -q '/swapfile'; then
+              [ ! -f /swapfile ] && (sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none)
+              [ -f /swapfile ] && sudo chmod 600 /swapfile && sudo mkswap /swapfile 2>/dev/null && sudo swapon /swapfile 2>/dev/null || true
+            fi
+            cd '${EC2_BACKEND_APP_DIR}'
+            chmod +x scripts/deploy-ec2.sh
+            bash scripts/deploy-ec2.sh
+          "
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "✅ Backend deployed. Gateway should be on :4000 (see PM2 on EC2)."

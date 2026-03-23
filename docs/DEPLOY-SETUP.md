@@ -1,6 +1,22 @@
 # Backend Deploy Setup – Step by Step
 
-> **Monorepo note:** Deploy workflows live at the **repository root**: `.github/workflows/deploy-dev.yml`.  
+## Standalone backend repo (`new_lumi_backend`, etc.)
+
+If your GitHub repo is **only** the backend (root shows `services/`, `docker-compose.yml`, **no** `.github` yet):
+
+1. **Add the workflow file** to the repo root (commit & push to `dev`):
+   - Copy **`backend/.github/workflows/deploy-dev.yml`** from this monorepo into **your repo** as:
+     - `.github/workflows/deploy-dev.yml`
+2. **GitHub → Settings → Secrets and variables → Actions**
+   - **Secrets:** `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY` or `EC2_SSH_KEY_B64`, `BACKEND_ENV_B64` (base64 of your production `.env`)
+   - **Variables → Actions:** `BACKEND_EC2_PATH` = absolute path on EC2 (e.g. `/var/www/lumi-ride-backend`)
+3. Push to **`dev`** → **Actions** tab should show **Deploy backend to EC2**.
+
+Without step 1, **nothing runs** — GitHub only loads workflows from `.github/workflows/` at the **repository root**.
+
+---
+
+> **Monorepo note:** If you use the **UI monorepo** instead, deploy workflows live at the **repository root**: `.github/workflows/deploy-dev.yml`.  
 > Backend auto-deploy runs when you set the variable **`BACKEND_EC2_PATH`** (see `docs/GITHUB-DEPLOY.md`).  
 > The steps below still apply for **`BACKEND_ENV_B64`** and EC2 layout.
 
