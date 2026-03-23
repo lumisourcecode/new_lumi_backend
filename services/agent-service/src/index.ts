@@ -401,6 +401,44 @@ function registerRoutes(prefix: "/partner" | "/agent") {
     try {
       const claims = requireAuth(req.headers.authorization);
       requireRole(claims, ["partner"]);
+      const q = String(req.query.q ?? "").trim().toLowerCase();
+      const status = String(req.query.status ?? "").trim().toLowerCase();
+      const sort = String(req.query.sort ?? "created_desc").trim().toLowerCase();
+      const page = Math.max(1, Number(req.query.page ?? 1) || 1);
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20) || 20));
+      const offset = (page - 1) * limit;
+      const sortSql =
+        sort === "scheduled_asc"
+          ? "b.scheduled_at asc"
+          : sort === "scheduled_desc"
+            ? "b.scheduled_at desc"
+            : sort === "created_asc"
+              ? "b.created_at asc"
+              : "b.created_at desc";
+      const params: unknown[] = [claims.sub];
+      const where: string[] = ["b.created_by = $1"];
+      if (status && status !== "all") {
+        params.push(status);
+        where.push(`lower(b.status) = $${params.length}`);
+      }
+      if (q) {
+        params.push(`%${q}%`);
+        where.push(
+          `(lower(b.pickup) like $${params.length}
+            or lower(b.dropoff) like $${params.length}
+            or lower(coalesce(rp.full_name,'')) like $${params.length}
+            or lower(coalesce(u.email,'')) like $${params.length})`,
+        );
+      }
+      const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+      const countRes = await pool.query(
+        `select count(*)::int as c from bookings b
+         left join rider_profiles rp on rp.user_id = b.rider_id
+         left join users u on u.id = b.rider_id
+         ${whereSql}`,
+        params,
+      );
+      params.push(limit, offset);
       const result = await pool.query(
         `select b.id, b.pickup, b.dropoff, b.pickup_lat, b.pickup_lng, b.dropoff_lat, b.dropoff_lng,
                 b.scheduled_at, b.status, b.rider_id, b.mobility_needs, b.notes,
@@ -413,11 +451,13 @@ function registerRoutes(prefix: "/partner" | "/agent") {
          left join trips t on t.booking_id = b.id
          left join users du on du.id = t.driver_id
          left join driver_profiles dp on dp.user_id = t.driver_id
-         where b.created_by = $1
-         order by b.created_at desc limit 200`,
-        [claims.sub],
+         ${whereSql}
+         order by ${sortSql}
+         limit $${params.length - 1} offset $${params.length}`,
+        params,
       );
-      return res.json({ items: result.rows });
+      const total = Number(countRes.rows[0]?.c ?? 0);
+      return res.json({ items: result.rows, total, page, limit });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Internal Server Error";
       console.error("[partner-service] Error:", error);
@@ -430,18 +470,53 @@ function registerRoutes(prefix: "/partner" | "/agent") {
     try {
       const claims = requireAuth(req.headers.authorization);
       requireRole(claims, ["partner"]);
+      const q = String(req.query.q ?? "").trim().toLowerCase();
+      const sort = String(req.query.sort ?? "name_asc").trim().toLowerCase();
+      const page = Math.max(1, Number(req.query.page ?? 1) || 1);
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20) || 20));
+      const offset = (page - 1) * limit;
+      const sortSql =
+        sort === "name_desc"
+          ? "rp.full_name desc nulls last, u.email desc"
+          : sort === "bookings_desc"
+            ? "bookings_count::int desc, rp.full_name asc nulls last, u.email asc"
+            : sort === "bookings_asc"
+              ? "bookings_count::int asc, rp.full_name asc nulls last, u.email asc"
+              : "rp.full_name asc nulls last, u.email asc";
+      const params: unknown[] = [claims.sub];
+      const where: string[] = ["pc.partner_id = $1"];
+      if (q) {
+        params.push(`%${q}%`);
+        where.push(
+          `(lower(coalesce(rp.full_name,'')) like $${params.length}
+            or lower(u.email) like $${params.length}
+            or lower(coalesce(rp.ndis_id,'')) like $${params.length}
+            or lower(coalesce(pc.notes,'')) like $${params.length})`,
+        );
+      }
+      const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+      const countRes = await pool.query(
+        `select count(*)::int as c
+         from partner_clients pc
+         join users u on u.id = pc.rider_id
+         left join rider_profiles rp on rp.user_id = u.id
+         ${whereSql}`,
+        params,
+      );
+      params.push(limit, offset);
       const result = await pool.query(
         `select u.id, u.email, rp.full_name, rp.phone, rp.ndis_id, pc.notes,
                 (select count(*) from bookings b where b.rider_id = u.id and b.created_by = $1) as bookings_count
          from partner_clients pc
          join users u on u.id = pc.rider_id
          left join rider_profiles rp on rp.user_id = u.id
-         where pc.partner_id = $1
-         order by rp.full_name nulls last, u.email
-         limit 500`,
-        [claims.sub],
+         ${whereSql}
+         order by ${sortSql}
+         limit $${params.length - 1} offset $${params.length}`,
+        params,
       );
-      return res.json({ items: result.rows });
+      const total = Number(countRes.rows[0]?.c ?? 0);
+      return res.json({ items: result.rows, total, page, limit });
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Internal Server Error";
       console.error("[partner-service] Error:", error);
