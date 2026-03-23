@@ -9,6 +9,20 @@ BACKEND_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${BACKEND_DIR}"
 echo "Deploying backend from ${BACKEND_DIR}"
 
+# One-shot cleanup for tiny EC2 volumes before apt/npm writes.
+lumi_cleanup_disk() {
+  echo "Disk before cleanup:"
+  df -h .
+  sudo journalctl --vacuum-time=2d >/dev/null 2>&1 || true
+  sudo apt-get clean >/dev/null 2>&1 || true
+  sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* >/dev/null 2>&1 || true
+  sudo docker system prune -af >/dev/null 2>&1 || true
+  rm -rf ~/.npm/_cacache ~/.cache ~/.cache/puppeteer "${HOME}/.cache/puppeteer" >/dev/null 2>&1 || true
+  echo "Disk after cleanup:"
+  df -h .
+}
+lumi_cleanup_disk
+
 # billing-service uses Puppeteer — downloading Chrome during npm costs ~400MB+ and often fails with ENOSPC on small EC2.
 # Use system Chromium at runtime (see services/billing-service PDF engine).
 export PUPPETEER_SKIP_DOWNLOAD=true
@@ -24,6 +38,8 @@ ensure_chromium_for_puppeteer() {
   fi
   echo "Installing Chromium for invoice PDFs (Puppeteer)..."
   if command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get clean >/dev/null 2>&1 || true
+    sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* >/dev/null 2>&1 || true
     sudo apt-get update -qq
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y chromium-browser 2>/dev/null \
       || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y chromium 2>/dev/null \

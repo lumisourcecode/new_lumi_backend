@@ -84,6 +84,11 @@ jobs:
           ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" "
             set -e
             export DEBIAN_FRONTEND=noninteractive
+            sudo journalctl --vacuum-time=2d >/dev/null 2>&1 || true
+            sudo apt-get clean >/dev/null 2>&1 || true
+            sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* >/dev/null 2>&1 || true
+            sudo docker system prune -af >/dev/null 2>&1 || true
+            rm -rf ~/.npm/_cacache ~/.cache ~/.cache/puppeteer >/dev/null 2>&1 || true
             if ! command -v node >/dev/null 2>&1; then
               curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs
             fi
