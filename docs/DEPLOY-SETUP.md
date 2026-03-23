@@ -9,7 +9,9 @@ If your GitHub repo is **only** the backend (root shows `services/`, `docker-com
      - `.github/workflows/deploy-dev.yml`
 2. **GitHub → Settings → Secrets and variables → Actions**
    - **Secrets:** `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY` or `EC2_SSH_KEY_B64`, `BACKEND_ENV_B64` (base64 of your production `.env`)
-   - **Variables → Actions:** `BACKEND_EC2_PATH` = absolute path on EC2 (e.g. `/var/www/lumi-ride-backend`)
+   - **Path on EC2** — set **one** of:
+     - **Variables →** `BACKEND_EC2_PATH` = e.g. `/var/www/lumi-ride-backend`, **or**
+     - **Secrets →** `EC2_BACKEND_APP_DIR` = same path (use if the variable was empty and the workflow failed)
 3. Push to **`dev`** → **Actions** tab should show **Deploy backend to EC2**.
 
 Without step 1, **nothing runs** — GitHub only loads workflows from `.github/workflows/` at the **repository root**.

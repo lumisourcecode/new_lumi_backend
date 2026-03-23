@@ -4,7 +4,9 @@
 #
 # GitHub → Settings → Secrets and variables → Actions
 #   Secrets: EC2_HOST, EC2_USER, EC2_SSH_KEY or EC2_SSH_KEY_B64, BACKEND_ENV_B64
-#   Variables: BACKEND_EC2_PATH (e.g. /var/www/lumi-ride-backend)
+#   Path on EC2 — use ONE of:
+#     • Variable BACKEND_EC2_PATH (e.g. /var/www/lumi-ride-backend), OR
+#     • Secret EC2_BACKEND_APP_DIR (same value; use if Variables UI is empty)
 #
 name: Deploy backend to EC2
 
@@ -60,11 +62,17 @@ jobs:
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
-          EC2_BACKEND_APP_DIR: ${{ vars.BACKEND_EC2_PATH }}
+          BACKEND_PATH_VAR: ${{ vars.BACKEND_EC2_PATH }}
+          BACKEND_PATH_SECRET: ${{ secrets.EC2_BACKEND_APP_DIR }}
         run: |
           set -e
           test -n "${EC2_HOST}" && test -n "${EC2_USER}" || { echo "Set secrets EC2_HOST and EC2_USER" >&2; exit 1; }
-          test -n "${EC2_BACKEND_APP_DIR}" || { echo "Set repository variable BACKEND_EC2_PATH (e.g. /var/www/lumi-ride-backend)" >&2; exit 1; }
+          EC2_BACKEND_APP_DIR="${BACKEND_PATH_VAR:-${BACKEND_PATH_SECRET}}"
+          export EC2_BACKEND_APP_DIR
+          test -n "${EC2_BACKEND_APP_DIR}" || {
+            echo "Set repository variable BACKEND_EC2_PATH or secret EC2_BACKEND_APP_DIR (e.g. /var/www/lumi-ride-backend)" >&2
+            exit 1
+          }
           ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "${EC2_USER}@${EC2_HOST}" "mkdir -p '${EC2_BACKEND_APP_DIR}'"
           rsync -az --delete \
             --exclude '.git' \
