@@ -1,5 +1,22 @@
+import fs from 'node:fs';
+
 import puppeteer from 'puppeteer';
 import handlebars from 'handlebars';
+
+/** On servers we set PUPPETEER_SKIP_DOWNLOAD and use apt-installed Chromium. */
+function resolveChromeExecutable(): string | undefined {
+  const fromEnv = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
+  if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
+  const candidates = [
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return undefined;
+}
 
 export type InvoiceData = {
   invoiceNumber: string;
@@ -114,9 +131,11 @@ const INVOICE_TEMPLATE = `
 `;
 
 export async function generateInvoicePDF(data: InvoiceData): Promise<Buffer> {
-  const browser = await puppeteer.launch({ 
+  const executablePath = resolveChromeExecutable();
+  const browser = await puppeteer.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'] 
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    ...(executablePath ? { executablePath } : {}),
   });
   
   const page = await browser.newPage();
