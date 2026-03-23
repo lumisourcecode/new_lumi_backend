@@ -9,8 +9,13 @@ BACKEND_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${BACKEND_DIR}"
 echo "Deploying backend from ${BACKEND_DIR}"
 
-# Install deps
-npm ci
+# Install deps (ci is strict; fall back if lockfile lags package.json)
+npm_install_or_ci() {
+  if npm ci; then return 0; fi
+  echo "WARNING: npm ci failed; running npm install..." >&2
+  npm install
+}
+npm_install_or_ci
 
 # Distribute .env to all services
 if [ -f ".env" ]; then

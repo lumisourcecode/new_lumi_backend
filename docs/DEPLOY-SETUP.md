@@ -1,5 +1,9 @@
 # Backend Deploy Setup – Step by Step
 
+> **Monorepo note:** Deploy workflows live at the **repository root**: `.github/workflows/deploy-dev.yml`.  
+> Backend auto-deploy runs when you set the variable **`BACKEND_EC2_PATH`** (see `docs/GITHUB-DEPLOY.md`).  
+> The steps below still apply for **`BACKEND_ENV_B64`** and EC2 layout.
+
 Auto-deploy to EC2 when you push to `dev`.
 
 ---
@@ -19,7 +23,7 @@ Auto-deploy to EC2 when you push to `dev`.
 
 ## Step 2: Add GitHub Secrets
 
-1. Open your **backend repo** on GitHub
+1. Open your **GitHub repo** (monorepo root) on GitHub
 2. Go to **Settings** → **Secrets and variables** → **Actions**
 3. Click **New repository secret** and add each:
 
@@ -28,7 +32,8 @@ Auto-deploy to EC2 when you push to `dev`.
 | `EC2_HOST`        | EC2 public IP (e.g. `13.239.237.63`) |
 | `EC2_USER`        | SSH user, usually `ubuntu` |
 | `EC2_SSH_KEY`     | Full content of your `.pem` file (including `-----BEGIN...` and `-----END...`) |
-| `EC2_APP_DIR`     | Deploy path, e.g. `/var/www/lumi-ride-backend` |
+| `EC2_APP_DIR`     | **Frontend** deploy path, e.g. `/var/www/lumi-ride-dev` |
+| (Variable) `BACKEND_EC2_PATH` | **Backend** path on EC2, e.g. `/var/www/lumi-ride-backend` — set under **Variables** |
 | `GIT_REPO_URL`    | `https://YOUR_GITHUB_USER:YOUR_PAT@github.com/ORG/REPO.git` (backend repo URL with PAT from Step 1) |
 | `BACKEND_ENV_B64` | See Step 3 below |
 
@@ -61,9 +66,9 @@ Replace `YOUR_GITHUB_USER`, `YOUR_PAT`, `ORG`, and `REPO` with your backend repo
 ## Step 5: Push the workflow
 
 ```bash
-cd /Users/Lumi\ rides/UI
-git add backend/.github backend/docs .gitignore backend/README.md
-git commit -m "Add backend deploy workflow"
+cd /path/to/your/UI
+git add .github/workflows docs backend/docs
+git commit -m "Add root deploy workflow"
 git push origin dev
 ```
 
@@ -72,7 +77,7 @@ git push origin dev
 ## Step 6: Verify
 
 1. Go to your repo → **Actions**
-2. You should see **Deploy Backend Dev to EC2** run
+2. You should see **Deploy dev to EC2** run (frontend; backend if `BACKEND_EC2_PATH` is set)
 3. Check the run logs for success
 
 ---
