@@ -13,6 +13,7 @@ import {
   registerBodySchema,
   resetPasswordBodySchema,
   requireAuth,
+  runMigrations,
   sendPasswordResetEmail,
   sendOtpBodySchema,
   sendSms,
@@ -487,7 +488,16 @@ app.post("/auth/reset-password", async (req, res) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`auth-service listening on ${port}`);
-});
+async function start() {
+  try {
+    await runMigrations();
+  } catch (error) {
+    console.error("[auth-service] migration warning:", error);
+  }
+  app.listen(port, () => {
+    console.log(`auth-service listening on ${port}`);
+  });
+}
+
+void start();
 

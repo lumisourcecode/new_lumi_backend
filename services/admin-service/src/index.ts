@@ -7,6 +7,7 @@ import {
   createUserBodySchema,
   hashPassword,
   pool,
+  runMigrations,
   requireAuth,
   requireRole,
   sendGenericEmail,
@@ -1724,7 +1725,16 @@ app.post("/admin/documents/:docId/verify", async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`admin-service listening on ${port}`);
-});
+async function start() {
+  try {
+    await runMigrations();
+  } catch (error) {
+    console.error("[admin-service] migration warning:", error);
+  }
+  app.listen(port, () => {
+    console.log(`admin-service listening on ${port}`);
+  });
+}
+
+void start();
 

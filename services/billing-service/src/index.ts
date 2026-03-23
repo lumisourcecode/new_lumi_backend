@@ -4,7 +4,9 @@ import cors from "cors";
 import { 
   pool, 
   requireAuth, 
-  requireRole 
+  requireRole,
+  runMigrations,
+  sendGenericEmail,
 } from "@lumi/shared";
 import { generateInvoicePDF, InvoiceData } from "./pdf-engine.js";
 
@@ -89,6 +91,77 @@ app.post("/admin/invoices/manual", async (req, res) => {
     }
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Internal Error" });
+  }
+});
+
+app.post("/admin/invoices/:id/send", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const to = String(req.body?.to ?? "").trim();
+    if (!to) return res.status(400).json({ error: "to is required" });
+
+    const invoiceRes = await pool.query(
+      `select i.id, i.invoice_number, i.total_amount, i.currency, i.status, i.notes, i.issue_date, i.due_date,
+              i.trip_id, u.email as recipient_email
+       from invoices i
+       join users u on u.id = i.recipient_id
+       where i.id = $1`,
+      [id],
+    );
+    if (!invoiceRes.rowCount) return res.status(404).json({ error: "Invoice not found" });
+    const invoice = invoiceRes.rows[0] as Record<string, unknown>;
+
+    const itemsRes = await pool.query(
+      `select description, ndis_support_item, quantity, unit_price, total_price
+       from invoice_items where invoice_id = $1`,
+      [id],
+    );
+
+    const tripInfo = invoice.trip_id
+      ? await pool.query(
+          `select b.pickup, b.dropoff, b.scheduled_at, t.state
+           from trips t join bookings b on b.id = t.booking_id where t.id = $1`,
+          [invoice.trip_id],
+        )
+      : { rows: [] };
+    const trip = tripInfo.rows[0] as Record<string, unknown> | undefined;
+
+    const itemsHtml = itemsRes.rows
+      .map((it) => {
+        const row = it as Record<string, unknown>;
+        return `<li>${String(row.description ?? "Service")} | Qty: ${row.quantity} | Unit: ${row.unit_price} | Total: ${row.total_price}${row.ndis_support_item ? ` | NDIS: ${row.ndis_support_item}` : ""}</li>`;
+      })
+      .join("");
+
+    const html = `
+      <h2>Lumi Ride Invoice ${String(invoice.invoice_number)}</h2>
+      <p><strong>Total:</strong> ${String(invoice.total_amount)} ${String(invoice.currency ?? "AUD")}</p>
+      <p><strong>Status:</strong> ${String(invoice.status)}</p>
+      <p><strong>Issue Date:</strong> ${String(invoice.issue_date ?? "")}</p>
+      <p><strong>Due Date:</strong> ${String(invoice.due_date ?? "")}</p>
+      ${trip ? `<p><strong>Trip:</strong> ${String(trip.pickup ?? "")} → ${String(trip.dropoff ?? "")} | ${String(trip.scheduled_at ?? "")} | ${String(trip.state ?? "")}</p>` : ""}
+      <p><strong>Recipient:</strong> ${String(invoice.recipient_email ?? "")}</p>
+      <p><strong>Notes:</strong> ${String(invoice.notes ?? "-")}</p>
+      <h3>Line Items</h3>
+      <ul>${itemsHtml || "<li>No invoice items.</li>"}</ul>
+    `;
+
+    const result = await sendGenericEmail({
+      to,
+      subject: `Invoice ${String(invoice.invoice_number)} from Lumi Ride`,
+      html,
+      text: html.replace(/<[^>]*>/g, " "),
+    });
+
+    if (result.delivered) {
+      await pool.query("update invoices set status = 'sent', updated_at = now() where id = $1 and status = 'draft'", [id]);
+    }
+    return res.json({ ok: true, result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Error";
+    return res.status(500).json({ error: msg });
   }
 });
 
@@ -179,6 +252,15 @@ app.get("/partner/billing-settings", async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`billing-service listening on ${port}`);
-});
+async function start() {
+  try {
+    await runMigrations();
+  } catch (error) {
+    console.error("[billing-service] migration warning:", error);
+  }
+  app.listen(port, () => {
+    console.log(`billing-service listening on ${port}`);
+  });
+}
+
+void start();

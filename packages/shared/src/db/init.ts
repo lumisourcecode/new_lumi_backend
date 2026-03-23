@@ -6,8 +6,8 @@ import argon2 from "argon2";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(__dirname, "../../../../");
 config({ path: path.join(backendRoot, ".env") });
-import { pool } from "./client";
-import { runMigrations } from "./migrations";
+import { pool } from "./client.js";
+import { runMigrations } from "./migrations.js";
 
 async function seedMainAdmin() {
   const email = process.env.ADMIN_EMAIL;

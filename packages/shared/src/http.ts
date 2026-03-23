@@ -71,13 +71,16 @@ export const adminChangePasswordBodySchema = z.object({
 export const createUserBodySchema = z.object({
   email: z.string().email(),
   password: strongPassword,
-  role: z.enum(["rider", "driver", "partner", "partner_employee", "admin"]),
+  role: z.enum(["rider", "driver", "partner", "partner_employee", "admin", "agent"]),
   fullName: z.string().optional(),
   phone: z.string().optional(),
   ndisId: z.string().optional(),
   orgName: z.string().optional(),
   vehicleRego: z.string().optional(),
-});
+}).transform((data) => ({
+  ...data,
+  role: data.role === "agent" ? "partner" : data.role,
+}));
 
 export function getBearerToken(authHeader?: string) {
   if (!authHeader) return null;
