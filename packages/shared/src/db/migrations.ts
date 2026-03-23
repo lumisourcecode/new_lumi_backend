@@ -16,7 +16,7 @@ alter table users add column if not exists created_by uuid;
 
 create table if not exists user_roles (
   user_id uuid not null references users(id) on delete cascade,
-  role text not null check (role in ('rider','driver','partner','admin')),
+  role text not null check (role in ('rider','driver','partner','partner_employee','admin')),
   primary key (user_id, role)
 );
 
@@ -231,7 +231,7 @@ alter table users add column if not exists phone text;
 alter table users add column if not exists google_id text;
 
 alter table user_roles drop constraint if exists user_roles_role_check;
-alter table user_roles add constraint user_roles_role_check check (role in ('rider','driver','partner','admin'));
+alter table user_roles add constraint user_roles_role_check check (role in ('rider','driver','partner','partner_employee','admin'));
 
 update user_roles set role = 'partner' where role = 'agent';
 
@@ -305,6 +305,71 @@ create table if not exists partner_billing_settings (
 );
 
 alter table invoices add column if not exists partner_id uuid references users(id) on delete set null;
+
+create table if not exists admin_smtp_settings (
+  id int primary key default 1,
+  host text,
+  port int not null default 587,
+  username text,
+  password text,
+  from_name text,
+  from_email text,
+  secure_mode text not null default 'tls' check (secure_mode in ('tls','ssl','none')),
+  is_active boolean not null default true,
+  updated_by uuid references users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  last_tested_at timestamptz,
+  last_test_result text
+);
+alter table admin_smtp_settings drop constraint if exists admin_smtp_settings_singleton;
+alter table admin_smtp_settings add constraint admin_smtp_settings_singleton check (id = 1);
+
+create table if not exists partner_tenant_settings (
+  partner_id uuid primary key references users(id) on delete cascade,
+  tenant_slug text unique,
+  brand_name text,
+  logo_url text,
+  support_email text,
+  support_phone text,
+  smtp_host text,
+  smtp_port int not null default 587,
+  smtp_username text,
+  smtp_password text,
+  smtp_from_email text,
+  smtp_from_name text,
+  smtp_secure_mode text not null default 'tls' check (smtp_secure_mode in ('tls','ssl','none')),
+  smtp_enabled boolean not null default false,
+  mail_template text,
+  updated_by uuid references users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists partner_employees (
+  id uuid primary key default gen_random_uuid(),
+  partner_id uuid not null references users(id) on delete cascade,
+  employee_user_id uuid not null references users(id) on delete cascade,
+  title text,
+  permissions jsonb not null default '{}'::jsonb,
+  status text not null default 'active' check (status in ('invited','active','disabled')),
+  invited_at timestamptz,
+  invited_by uuid references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(partner_id, employee_user_id)
+);
+
+create table if not exists admin_permission_matrix (
+  id uuid primary key default gen_random_uuid(),
+  role text not null check (role in ('admin','partner','partner_employee','driver','rider')),
+  entity text not null,
+  can_create boolean not null default true,
+  can_read boolean not null default true,
+  can_update boolean not null default true,
+  can_delete boolean not null default false,
+  updated_by uuid references users(id) on delete set null,
+  updated_at timestamptz not null default now(),
+  unique(role, entity)
+);
 `;
 
 export async function runMigrations() {

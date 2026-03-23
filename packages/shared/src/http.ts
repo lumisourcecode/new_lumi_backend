@@ -71,7 +71,7 @@ export const adminChangePasswordBodySchema = z.object({
 export const createUserBodySchema = z.object({
   email: z.string().email(),
   password: strongPassword,
-  role: z.enum(["rider", "driver", "partner", "admin"]),
+  role: z.enum(["rider", "driver", "partner", "partner_employee", "admin"]),
   fullName: z.string().optional(),
   phone: z.string().optional(),
   ndisId: z.string().optional(),

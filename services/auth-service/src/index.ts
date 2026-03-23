@@ -152,9 +152,12 @@ app.post("/auth/login", async (req, res) => {
     );
     await pool.query("update user_roles set role = 'partner' where user_id = $1 and role = 'agent'", [user.id]);
     const roleRes = await pool.query("select role from user_roles where user_id = $1 order by role asc", [user.id]);
-    const roles = normalizeRoles(roleRes.rows.map((r: { role: string }) => r.role)) as Array<"rider" | "driver" | "partner" | "admin">;
+    const roles = normalizeRoles(roleRes.rows.map((r: { role: string }) => r.role));
 
-    if (portal && !roles.includes(portal)) {
+    const portalAllowed = portal === "partner"
+      ? roles.includes("partner") || roles.includes("partner_employee")
+      : !portal || roles.includes(portal);
+    if (!portalAllowed) {
       return res.status(403).json({
         error: `Not registered for ${portal}. Register from the ${portal} portal first.`,
       });

@@ -3,7 +3,7 @@ import express from "express";
 import cors from "cors";
 import crypto from "node:crypto";
 
-import { hashPassword, pool, requireAuth, requireRole } from "@lumi/shared";
+import { AppRole, hashPassword, pool, requireAuth, requireRole, sendGenericEmail } from "@lumi/shared";
 
 const app = express();
 const port = Number(process.env.PARTNER_SERVICE_PORT ?? process.env.AGENT_SERVICE_PORT ?? 4400);
@@ -27,7 +27,295 @@ function parseClientInput(body: unknown) {
   };
 }
 
+async function resolvePartnerScope(claims: { sub: string; roles: AppRole[] }) {
+  if (claims.roles.includes("partner")) return claims.sub;
+  if (claims.roles.includes("partner_employee")) {
+    const row = await pool.query(
+      `select partner_id
+       from partner_employees
+       where employee_user_id = $1 and status = 'active'
+       limit 1`,
+      [claims.sub],
+    );
+    if (!row.rowCount) throw new Error("Forbidden");
+    return row.rows[0].partner_id as string;
+  }
+  throw new Error("Forbidden");
+}
+
 function registerRoutes(prefix: "/partner" | "/agent") {
+  app.get(`${prefix}/settings`, async (req, res) => {
+    try {
+      const claims = requireAuth(req.headers.authorization);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
+      const profile = await pool.query(
+        `select u.email, pp.org_name, pp.contact_name
+         from users u
+         left join partner_profiles pp on pp.user_id = u.id
+         where u.id = $1`,
+        [partnerId],
+      );
+      const tenant = await pool.query(
+        `select tenant_slug, brand_name, logo_url, support_email, support_phone, smtp_host, smtp_port, smtp_username,
+                smtp_from_email, smtp_from_name, smtp_secure_mode, smtp_enabled, mail_template
+         from partner_tenant_settings where partner_id = $1`,
+        [partnerId],
+      );
+      return res.json({
+        ...(profile.rows[0] ?? {}),
+        ...(tenant.rows[0] ?? {}),
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
+  app.patch(`${prefix}/settings`, async (req, res) => {
+    try {
+      const claims = requireAuth(req.headers.authorization);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
+      const orgName = String(req.body?.orgName ?? "").trim() || null;
+      const contactName = String(req.body?.contactName ?? "").trim() || null;
+      await pool.query(
+        `insert into partner_profiles (user_id, org_name, contact_name)
+         values ($1, $2, $3)
+         on conflict (user_id) do update set
+           org_name = coalesce($2, partner_profiles.org_name),
+           contact_name = coalesce($3, partner_profiles.contact_name)`,
+        [partnerId, orgName, contactName],
+      );
+      await pool.query(
+        `insert into partner_tenant_settings
+          (partner_id, tenant_slug, brand_name, logo_url, support_email, support_phone, smtp_host, smtp_port, smtp_username, smtp_password, smtp_from_email, smtp_from_name, smtp_secure_mode, smtp_enabled, mail_template, updated_by, updated_at)
+         values
+          ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now())
+         on conflict (partner_id) do update set
+          tenant_slug = coalesce(excluded.tenant_slug, partner_tenant_settings.tenant_slug),
+          brand_name = coalesce(excluded.brand_name, partner_tenant_settings.brand_name),
+          logo_url = coalesce(excluded.logo_url, partner_tenant_settings.logo_url),
+          support_email = coalesce(excluded.support_email, partner_tenant_settings.support_email),
+          support_phone = coalesce(excluded.support_phone, partner_tenant_settings.support_phone),
+          smtp_host = coalesce(excluded.smtp_host, partner_tenant_settings.smtp_host),
+          smtp_port = coalesce(excluded.smtp_port, partner_tenant_settings.smtp_port),
+          smtp_username = coalesce(excluded.smtp_username, partner_tenant_settings.smtp_username),
+          smtp_password = coalesce(excluded.smtp_password, partner_tenant_settings.smtp_password),
+          smtp_from_email = coalesce(excluded.smtp_from_email, partner_tenant_settings.smtp_from_email),
+          smtp_from_name = coalesce(excluded.smtp_from_name, partner_tenant_settings.smtp_from_name),
+          smtp_secure_mode = coalesce(excluded.smtp_secure_mode, partner_tenant_settings.smtp_secure_mode),
+          smtp_enabled = coalesce(excluded.smtp_enabled, partner_tenant_settings.smtp_enabled),
+          mail_template = coalesce(excluded.mail_template, partner_tenant_settings.mail_template),
+          updated_by = excluded.updated_by,
+          updated_at = now()`,
+        [
+          partnerId,
+          String(req.body?.tenantSlug ?? "").trim() || null,
+          String(req.body?.brandName ?? "").trim() || null,
+          String(req.body?.logoUrl ?? "").trim() || null,
+          String(req.body?.supportEmail ?? "").trim() || null,
+          String(req.body?.supportPhone ?? "").trim() || null,
+          String(req.body?.smtpHost ?? "").trim() || null,
+          Number(req.body?.smtpPort ?? 587),
+          String(req.body?.smtpUsername ?? "").trim() || null,
+          String(req.body?.smtpPassword ?? "").trim() || null,
+          String(req.body?.smtpFromEmail ?? "").trim() || null,
+          String(req.body?.smtpFromName ?? "").trim() || null,
+          String(req.body?.smtpSecureMode ?? "tls").trim() || "tls",
+          typeof req.body?.smtpEnabled === "boolean" ? req.body.smtpEnabled : false,
+          String(req.body?.mailTemplate ?? "").trim() || null,
+          claims.sub,
+        ],
+      );
+      return res.json({ ok: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
+  app.get(`${prefix}/employees`, async (req, res) => {
+    try {
+      const claims = requireAuth(req.headers.authorization);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
+      const rows = await pool.query(
+        `select pe.id, pe.partner_id, pe.employee_user_id, pe.title, pe.status, pe.permissions, pe.invited_at, pe.created_at,
+                u.email
+         from partner_employees pe
+         join users u on u.id = pe.employee_user_id
+         where pe.partner_id = $1
+         order by pe.created_at desc`,
+        [partnerId],
+      );
+      return res.json({ items: rows.rows });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
+  app.post(`${prefix}/employees`, async (req, res) => {
+    try {
+      const claims = requireAuth(req.headers.authorization);
+      requireRole(claims, ["partner"]);
+      const partnerId = await resolvePartnerScope(claims);
+      const email = String(req.body?.email ?? "").trim().toLowerCase();
+      if (!email) return res.status(400).json({ error: "email is required" });
+      const title = String(req.body?.title ?? "").trim() || null;
+      const fullName = String(req.body?.fullName ?? "").trim() || null;
+      let userId: string;
+      const existing = await pool.query("select id from users where email = $1", [email]);
+      if (existing.rowCount) {
+        userId = existing.rows[0].id as string;
+      } else {
+        const temp = crypto.randomBytes(18).toString("hex");
+        const passwordHash = await hashPassword(temp);
+        const inserted = await pool.query(
+          "insert into users (email, password_hash, created_by) values ($1, $2, $3) returning id",
+          [email, passwordHash, claims.sub],
+        );
+        userId = inserted.rows[0].id as string;
+      }
+      await pool.query("insert into user_roles (user_id, role) values ($1, 'partner_employee') on conflict do nothing", [userId]);
+      if (fullName) {
+        await pool.query(
+          "insert into partner_profiles (user_id, contact_name) values ($1, $2) on conflict (user_id) do update set contact_name = coalesce(excluded.contact_name, partner_profiles.contact_name)",
+          [userId, fullName],
+        );
+      }
+      const insertedEmp = await pool.query(
+        `insert into partner_employees (partner_id, employee_user_id, title, permissions, status, invited_at, invited_by)
+         values ($1, $2, $3, $4, 'invited', now(), $5)
+         on conflict (partner_id, employee_user_id) do update set
+           title = coalesce(excluded.title, partner_employees.title),
+           permissions = excluded.permissions,
+           status = 'invited',
+           invited_at = now(),
+           invited_by = excluded.invited_by,
+           updated_at = now()
+         returning id`,
+        [partnerId, userId, title, req.body?.permissions ?? {}, claims.sub],
+      );
+      return res.status(201).json({ id: insertedEmp.rows[0]?.id, userId });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
+  app.patch(`${prefix}/employees/:id`, async (req, res) => {
+    try {
+      const claims = requireAuth(req.headers.authorization);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
+      await pool.query(
+        `update partner_employees set
+           title = coalesce($3, title),
+           permissions = coalesce($4, permissions),
+           status = coalesce($5, status),
+           updated_at = now()
+         where id = $1 and partner_id = $2`,
+        [
+          req.params.id,
+          partnerId,
+          req.body?.title ?? null,
+          req.body?.permissions ?? null,
+          req.body?.status ?? null,
+        ],
+      );
+      return res.json({ ok: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
+  app.delete(`${prefix}/employees/:id`, async (req, res) => {
+    try {
+      const claims = requireAuth(req.headers.authorization);
+      requireRole(claims, ["partner"]);
+      const partnerId = await resolvePartnerScope(claims);
+      await pool.query("delete from partner_employees where id = $1 and partner_id = $2", [req.params.id, partnerId]);
+      return res.json({ ok: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
+  app.post(`${prefix}/employees/:id/invite`, async (req, res) => {
+    try {
+      const claims = requireAuth(req.headers.authorization);
+      requireRole(claims, ["partner"]);
+      const partnerId = await resolvePartnerScope(claims);
+      const employee = await pool.query(
+        `select pe.id, pe.employee_user_id, u.email
+         from partner_employees pe
+         join users u on u.id = pe.employee_user_id
+         where pe.id = $1 and pe.partner_id = $2`,
+        [req.params.id, partnerId],
+      );
+      if (!employee.rowCount) return res.status(404).json({ error: "Employee not found" });
+      const row = employee.rows[0] as { email: string };
+      const mail = await sendGenericEmail({
+        to: row.email,
+        subject: "You are invited to Lumi Ride Partner Workspace",
+        html: "<p>You were invited to collaborate in your partner workspace. Please login to continue.</p>",
+        text: "You were invited to collaborate in your partner workspace. Please login to continue.",
+        partnerId,
+      });
+      await pool.query(
+        "update partner_employees set status = 'invited', invited_at = now(), invited_by = $2, updated_at = now() where id = $1",
+        [req.params.id, claims.sub],
+      );
+      return res.json({ ok: true, mail });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
+  app.post(`${prefix}/mail/send`, async (req, res) => {
+    try {
+      const claims = requireAuth(req.headers.authorization);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
+      const to = String(req.body?.to ?? "").trim();
+      const subject = String(req.body?.subject ?? "").trim();
+      const message = String(req.body?.message ?? "").trim();
+      if (!to || !subject || !message) return res.status(400).json({ error: "to, subject, message are required" });
+      const result = await sendGenericEmail({
+        to,
+        subject,
+        html: `<p>${message.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>`,
+        text: message,
+        partnerId,
+      });
+      return res.json({ ok: true, result });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Internal Server Error";
+      console.error("[partner-service] Error:", error);
+      const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
   app.get(`${prefix}/profile`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);

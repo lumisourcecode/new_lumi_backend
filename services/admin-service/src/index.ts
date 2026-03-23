@@ -9,6 +9,7 @@ import {
   pool,
   requireAuth,
   requireRole,
+  sendGenericEmail,
   sendNewPasswordEmail,
 } from "@lumi/shared";
 
@@ -1173,6 +1174,363 @@ app.patch("/admin/support-tickets/:id", async (req, res) => {
       [id, status],
     );
     if (!updated.rowCount) return res.status(404).json({ error: "Ticket not found" });
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.post("/admin/support-tickets", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const issueType = String(req.body?.issueType ?? "").trim();
+    const message = String(req.body?.message ?? "").trim();
+    if (!issueType || !message) return res.status(400).json({ error: "issueType and message are required" });
+    const inserted = await pool.query(
+      `insert into support_tickets (created_by, role, issue_type, reference_id, priority, message, status)
+       values ($1, 'admin', $2, $3, $4, $5, $6)
+       returning id`,
+      [
+        claims.sub,
+        issueType,
+        String(req.body?.referenceId ?? "").trim() || null,
+        String(req.body?.priority ?? "").trim() || "Normal",
+        message,
+        String(req.body?.status ?? "").trim() || "Open",
+      ],
+    );
+    return res.status(201).json({ id: inserted.rows[0]?.id });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/support-tickets/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const result = await pool.query("select * from support_tickets where id = $1", [req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ error: "Ticket not found" });
+    return res.json(result.rows[0]);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.delete("/admin/support-tickets/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    await pool.query("delete from support_tickets where id = $1", [req.params.id]);
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/settings/smtp", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const result = await pool.query(
+      `select host, port, username, from_name, from_email, secure_mode, is_active, updated_at, last_tested_at, last_test_result
+       from admin_smtp_settings where id = 1`,
+    );
+    return res.json(
+      result.rows[0] ?? {
+        host: "",
+        port: 587,
+        username: "",
+        from_name: "Lumi Ride",
+        from_email: "noreply@lumiride.com.au",
+        secure_mode: "tls",
+        is_active: false,
+      },
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.patch("/admin/settings/smtp", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const host = String(req.body?.host ?? "").trim() || null;
+    const port = Number(req.body?.port ?? 587);
+    const username = String(req.body?.username ?? "").trim() || null;
+    const password = String(req.body?.password ?? "").trim() || null;
+    const fromName = String(req.body?.fromName ?? "").trim() || null;
+    const fromEmail = String(req.body?.fromEmail ?? "").trim() || null;
+    const secureMode = String(req.body?.secureMode ?? "tls").trim() || "tls";
+    const isActive = Boolean(req.body?.isActive ?? false);
+    await pool.query(
+      `insert into admin_smtp_settings (id, host, port, username, password, from_name, from_email, secure_mode, is_active, updated_by, updated_at)
+       values (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+       on conflict (id) do update set
+         host = excluded.host,
+         port = excluded.port,
+         username = excluded.username,
+         password = coalesce(excluded.password, admin_smtp_settings.password),
+         from_name = excluded.from_name,
+         from_email = excluded.from_email,
+         secure_mode = excluded.secure_mode,
+         is_active = excluded.is_active,
+         updated_by = excluded.updated_by,
+         updated_at = now()`,
+      [host, port, username, password, fromName, fromEmail, secureMode, isActive, claims.sub],
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.post("/admin/settings/smtp/test", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const to = String(req.body?.to ?? "").trim();
+    if (!to) return res.status(400).json({ error: "to is required" });
+    const result = await sendGenericEmail({
+      to,
+      subject: "Lumi Ride SMTP test",
+      html: "<p>Your SMTP test from Lumi Ride admin settings succeeded.</p>",
+      text: "Your SMTP test from Lumi Ride admin settings succeeded.",
+    });
+    await pool.query(
+      "update admin_smtp_settings set last_tested_at = now(), last_test_result = $1, updated_by = $2 where id = 1",
+      [result.delivered ? "success" : "fallback_log", claims.sub],
+    );
+    return res.json({ ok: true, result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/permissions", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const rows = await pool.query("select * from admin_permission_matrix order by role, entity");
+    return res.json({ items: rows.rows });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.patch("/admin/permissions", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const role = String(req.body?.role ?? "").trim();
+    const entity = String(req.body?.entity ?? "").trim();
+    if (!role || !entity) return res.status(400).json({ error: "role and entity are required" });
+    await pool.query(
+      `insert into admin_permission_matrix (role, entity, can_create, can_read, can_update, can_delete, updated_by, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,now())
+       on conflict (role, entity) do update set
+         can_create = excluded.can_create,
+         can_read = excluded.can_read,
+         can_update = excluded.can_update,
+         can_delete = excluded.can_delete,
+         updated_by = excluded.updated_by,
+         updated_at = now()`,
+      [
+        role,
+        entity,
+        Boolean(req.body?.canCreate ?? true),
+        Boolean(req.body?.canRead ?? true),
+        Boolean(req.body?.canUpdate ?? true),
+        Boolean(req.body?.canDelete ?? false),
+        claims.sub,
+      ],
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/bookings/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const row = await pool.query("select * from bookings where id = $1", [req.params.id]);
+    if (!row.rowCount) return res.status(404).json({ error: "Booking not found" });
+    return res.json(row.rows[0]);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.delete("/admin/bookings/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    await pool.query("delete from bookings where id = $1", [req.params.id]);
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/trips/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const row = await pool.query("select * from trips where id = $1", [req.params.id]);
+    if (!row.rowCount) return res.status(404).json({ error: "Trip not found" });
+    return res.json(row.rows[0]);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.delete("/admin/trips/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    await pool.query("delete from trips where id = $1", [req.params.id]);
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/documents/:docId", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const row = await pool.query("select * from driver_documents where id = $1", [req.params.docId]);
+    if (!row.rowCount) return res.status(404).json({ error: "Document not found" });
+    return res.json(row.rows[0]);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.post("/admin/documents", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const driverId = String(req.body?.driverId ?? "").trim();
+    const docType = String(req.body?.docType ?? "").trim();
+    if (!driverId || !docType) return res.status(400).json({ error: "driverId and docType are required" });
+    const inserted = await pool.query(
+      "insert into driver_documents (driver_id, doc_type, status, expiry, admin_notes) values ($1,$2,$3,$4,$5) returning id",
+      [driverId, docType, String(req.body?.status ?? "Pending"), req.body?.expiry ?? null, req.body?.adminNotes ?? null],
+    );
+    return res.status(201).json({ id: inserted.rows[0]?.id });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.patch("/admin/documents/:docId", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    await pool.query(
+      `update driver_documents set
+        doc_type = coalesce($2, doc_type),
+        status = coalesce($3, status),
+        expiry = coalesce($4, expiry),
+        admin_notes = coalesce($5, admin_notes)
+       where id = $1`,
+      [req.params.docId, req.body?.docType ?? null, req.body?.status ?? null, req.body?.expiry ?? null, req.body?.adminNotes ?? null],
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.delete("/admin/documents/:docId", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    await pool.query("delete from driver_documents where id = $1", [req.params.docId]);
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.delete("/admin/users/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const superAdminCheck = await pool.query("select id from users where id = $1 and is_super_admin = true", [id]);
+    if (superAdminCheck.rowCount) return res.status(403).json({ error: "Cannot delete super admin." });
+    await pool.query("delete from users where id = $1", [id]);
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.delete("/admin/partners/:id", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    await pool.query("update users set is_active = false where id = $1", [req.params.id]);
     return res.json({ ok: true });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
