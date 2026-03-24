@@ -256,7 +256,8 @@ async function start() {
   try {
     await runMigrations();
   } catch (error) {
-    console.error("[billing-service] migration warning:", error);
+    console.error("[billing-service] migrations failed (refusing to start):", error);
+    process.exit(1);
   }
   app.listen(port, () => {
     console.log(`billing-service listening on ${port}`);

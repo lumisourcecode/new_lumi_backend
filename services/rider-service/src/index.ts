@@ -366,7 +366,8 @@ async function start() {
   try {
     await runMigrations();
   } catch (error) {
-    console.error("[rider-service] migration warning:", error);
+    console.error("[rider-service] migrations failed (refusing to start):", error);
+    process.exit(1);
   }
   app.listen(port, () => {
     console.log(`rider-service listening on ${port}`);

@@ -492,7 +492,8 @@ async function start() {
   try {
     await runMigrations();
   } catch (error) {
-    console.error("[auth-service] migration warning:", error);
+    console.error("[auth-service] migrations failed (refusing to start):", error);
+    process.exit(1);
   }
   app.listen(port, () => {
     console.log(`auth-service listening on ${port}`);
