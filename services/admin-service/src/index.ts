@@ -1625,7 +1625,8 @@ app.get("/admin/settings/smtp", async (req, res) => {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["admin"]);
     const result = await pool.query(
-      `select host, port, username, from_name, from_email, secure_mode, is_active, updated_at, last_tested_at, last_test_result
+      `select host, port, username, from_name, from_email, secure_mode, is_active, updated_at, last_tested_at, last_test_result,
+              (password is not null and length(trim(password)) > 0) as password_configured
        from admin_smtp_settings where id = 1`,
     );
     return res.json(
@@ -1637,6 +1638,7 @@ app.get("/admin/settings/smtp", async (req, res) => {
         from_email: "noreply@lumiride.com.au",
         secure_mode: "tls",
         is_active: false,
+        password_configured: false,
       },
     );
   } catch (error) {
@@ -1696,10 +1698,18 @@ app.post("/admin/settings/smtp/test", async (req, res) => {
       html: "<p>Your SMTP test from Lumi Ride admin settings succeeded.</p>",
       text: "Your SMTP test from Lumi Ride admin settings succeeded.",
     });
+    const ok = result.delivered;
     await pool.query(
       "update admin_smtp_settings set last_tested_at = now(), last_test_result = $1, updated_by = $2 where id = 1",
-      [result.delivered ? "success" : "fallback_log", claims.sub],
+      [ok ? "success" : "failed_no_smtp_or_auth", claims.sub],
     );
+    if (!ok) {
+      return res.status(502).json({
+        error:
+          "No working SMTP: enter your Gmail App Password (16 characters, no spaces), click Save SMTP Settings, then try again. Or set SMTP_HOST, SMTP_USER, SMTP_PASS in backend .env.",
+        result,
+      });
+    }
     return res.json({ ok: true, result });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
