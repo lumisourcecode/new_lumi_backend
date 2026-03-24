@@ -61,8 +61,18 @@ npm_install_or_ci() {
 }
 npm_install_or_ci
 
-# billing-service start script runs node dist/index.js — ensure it is compiled
-npm run build -w @lumi/billing-service 2>/dev/null || (cd services/billing-service && npm run build)
+# billing-service start script runs node dist/index.js — ensure it is compiled (do not hide errors)
+if ! npm run build -w @lumi/billing-service; then
+  echo "Workspace billing build failed; retrying from service directory..." >&2
+  (cd services/billing-service && npm run build) || {
+    echo "ERROR: billing-service build failed — PM2 will crash-loop on lumi-ride-dev-backend-billing. Fix TypeScript/build errors and redeploy." >&2
+    exit 1
+  }
+fi
+test -f services/billing-service/dist/index.js || {
+  echo "ERROR: services/billing-service/dist/index.js missing after build." >&2
+  exit 1
+}
 
 # Distribute .env to all services
 if [ -f ".env" ]; then
