@@ -61,6 +61,9 @@ npm_install_or_ci() {
 }
 npm_install_or_ci
 
+# billing-service start script runs node dist/index.js — ensure it is compiled
+npm run build -w @lumi/billing-service 2>/dev/null || (cd services/billing-service && npm run build)
+
 # Distribute .env to all services
 if [ -f ".env" ]; then
   for service in services/*; do

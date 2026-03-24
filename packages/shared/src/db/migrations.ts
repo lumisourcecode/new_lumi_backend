@@ -250,9 +250,11 @@ begin
     execute format('alter table public.user_roles drop constraint if exists %I', c.conname);
   end loop;
 end $$;
-alter table user_roles add constraint user_roles_role_check check (role in ('rider','driver','partner','partner_employee','admin'));
-
+-- Normalize legacy rows BEFORE adding CHECK (otherwise ADD CONSTRAINT fails with 23514).
 update user_roles set role = 'partner' where role = 'agent';
+update user_roles set role = 'partner' where role not in ('rider','driver','partner','partner_employee','admin');
+
+alter table user_roles add constraint user_roles_role_check check (role in ('rider','driver','partner','partner_employee','admin'));
 
 insert into partner_profiles (user_id, org_name, contact_name, created_at)
 select user_id, org_name, contact_name, created_at
@@ -400,7 +402,20 @@ create table if not exists admin_permission_matrix (
 );
 `;
 
+/** One lock for all services — PM2 starts auth/rider/driver/partner/admin/billing together; without this they can race on the same DDL and crash-loop. */
+const MIGRATION_LOCK_KEY = 582_194_711;
+
 export async function runMigrations() {
-  await pool.query(migrationSql);
+  const client = await pool.connect();
+  try {
+    await client.query("select pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
+    try {
+      await client.query(migrationSql);
+    } finally {
+      await client.query("select pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]).catch(() => undefined);
+    }
+  } finally {
+    client.release();
+  }
 }
 
