@@ -251,7 +251,10 @@ begin
   end loop;
 end $$;
 -- Normalize legacy rows BEFORE adding CHECK (otherwise ADD CONSTRAINT fails with 23514).
+update user_roles set role = trim(role) where role is not null and role <> trim(role);
+update user_roles set role = lower(role) where role is not null and role <> lower(role);
 update user_roles set role = 'partner' where role = 'agent';
+update user_roles set role = 'partner' where role is null or role = '';
 update user_roles set role = 'partner' where role not in ('rider','driver','partner','partner_employee','admin');
 
 alter table user_roles add constraint user_roles_role_check check (role in ('rider','driver','partner','partner_employee','admin'));
