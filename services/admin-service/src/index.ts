@@ -2,6 +2,7 @@ import {
   adminChangePasswordBodySchema,
   createUserBodySchema,
   hashPassword,
+  inferAuStateFromLocationText,
   pool,
   runMigrations,
   requireAuth,
@@ -13,6 +14,25 @@ import express from "express";
 import cors from "cors";
 
 const SUPER_ADMIN_EMAIL = (process.env.ADMIN_EMAIL ?? "admin@lumiride.com").toLowerCase().trim();
+const BILLING_BASE = String(process.env.BILLING_SERVICE_URL ?? "").trim() || `http://127.0.0.1:${process.env.BILLING_SERVICE_PORT ?? 4600}`;
+const BILLING_SECRET = String(process.env.BILLING_INTERNAL_SECRET ?? "").trim();
+
+async function billingPost(path: string, body: Record<string, unknown>): Promise<{ ok: boolean; err?: string }> {
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (BILLING_SECRET) headers["x-internal-secret"] = BILLING_SECRET;
+    const r = await fetch(`${BILLING_BASE.replace(/\/$/, "")}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) return { ok: false, err: await r.text() };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, err: e instanceof Error ? e.message : "billing fetch failed" };
+  }
+}
+
 const app = express();
 const port = Number(process.env.ADMIN_SERVICE_PORT ?? 4500);
 
@@ -1009,7 +1029,7 @@ app.patch("/admin/trips/:id/state", async (req, res) => {
       return res.status(400).json({ error: "state must be Assigned, InProgress, Completed, or Cancelled" });
     }
     const updated = await pool.query(
-      "update trips set state = $1 where id = $2 returning id",
+      "update trips set state = $1, driver_route_phase = case when $1::text = 'Completed' then 'dropped_off' else driver_route_phase end where id = $2 returning id",
       [state, id],
     );
     if (!updated.rowCount) return res.status(404).json({ error: "Trip not found" });
@@ -1019,7 +1039,75 @@ app.patch("/admin/trips/:id/state", async (req, res) => {
     );
     if (state === "Completed") {
       await pool.query("update bookings set status = 'completed' where id = (select booking_id from trips where id = $1)", [id]);
+      const info = await pool.query(
+        `select b.rider_id, b.pickup, b.dropoff, rp.full_name as rider_name
+         from trips t
+         join bookings b on b.id = t.booking_id
+         left join rider_profiles rp on rp.user_id = b.rider_id
+         where t.id = $1`,
+        [id],
+      );
+      const r = info.rows[0] as Record<string, unknown> | undefined;
+      if (r?.rider_id) {
+        const payload = JSON.stringify({
+          tripId: id,
+          step: "completed",
+          title: "Trip completed (admin)",
+          message: `Admin closed trip: ${String(r.pickup)} → ${String(r.dropoff)}`,
+          riderName: String(r.rider_name || "Rider"),
+        });
+        await pool.query(`insert into notifications (recipient_id, type, payload) values ($1, 'trip_completed', $2)`, [
+          r.rider_id,
+          payload,
+        ]);
+        const admins = await pool.query(`select distinct user_id from user_roles where role = 'admin'`);
+        for (const row of admins.rows) {
+          await pool.query(`insert into notifications (recipient_id, type, payload) values ($1, 'admin_trip_update', $2)`, [
+            row.user_id,
+            payload,
+          ]);
+        }
+      }
+      const cfg = await pool.query(
+        "select auto_invoice_on_trip_complete, auto_email_invoice_to_rider from admin_platform_settings where id = 1",
+      );
+      const row = cfg.rows[0] as { auto_invoice_on_trip_complete?: boolean; auto_email_invoice_to_rider?: boolean } | undefined;
+      if (row?.auto_invoice_on_trip_complete !== false) {
+        const br = await billingPost("/internal/process-trip", {
+          tripId: id,
+          sendEmailToRider: row?.auto_email_invoice_to_rider === true,
+        });
+        if (!br.ok) console.error("[admin-service] billing process-trip:", br.err);
+      }
     }
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.patch("/admin/trips/:id/quality-notes", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const raw = req.body?.adminQualityNotes;
+    if (raw != null && typeof raw !== "string") {
+      return res.status(400).json({ error: "adminQualityNotes must be a string" });
+    }
+    const adminQualityNotes = raw == null ? null : raw.slice(0, 8000);
+    const updated = await pool.query(
+      "update trips set admin_quality_notes = $1 where id = $2 returning id",
+      [adminQualityNotes, id],
+    );
+    if (!updated.rowCount) return res.status(404).json({ error: "Trip not found" });
+    await pool.query(
+      "insert into activity_log (user_id, action, entity_type, entity_id, payload) values ($1, 'admin_trip_quality_notes', 'trip', $2, $3)",
+      [claims.sub, id, JSON.stringify({ length: adminQualityNotes?.length ?? 0 })],
+    );
     return res.json({ ok: true });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
@@ -1131,30 +1219,52 @@ app.post("/admin/bookings", async (req, res) => {
       );
     }
     const booking = inserted.rows[0] as { id: string };
-    await pool.query(
+    const pickupState =
+      inferAuStateFromLocationText(String(pickup)) ||
+      (typeof req.body?.pickupState === "string" ? String(req.body.pickupState).trim().toUpperCase().slice(0, 3) : null);
+    if (pickupState) {
+      await pool.query("update bookings set pickup_state = $1 where id = $2", [pickupState, booking.id]);
+    }
+
+    const tripIns = await pool.query(
       driverId
-        ? "insert into trips (booking_id, state, driver_id, assigned_at) values ($1, 'Assigned', $2, now())"
-        : "insert into trips (booking_id, state) values ($1, 'pending_assignment')",
+        ? "insert into trips (booking_id, state, driver_id, assigned_at) values ($1, 'Assigned', $2, now()) returning id"
+        : "insert into trips (booking_id, state) values ($1, 'pending_assignment') returning id",
       driverId ? [booking.id, driverId] : [booking.id],
     );
+    const tripId = tripIns.rows[0]?.id as string;
+
     await pool.query(
       "insert into activity_log (user_id, action, entity_type, entity_id, payload) values ($1, 'admin_created_booking', 'booking', $2, $3)",
-      [claims.sub, booking.id, JSON.stringify({ riderId, pickup, dropoff, driverId })],
+      [claims.sub, booking.id, JSON.stringify({ riderId, pickup, dropoff, driverId, pickupState })],
     );
     if (driverId) {
       await pool.query(
         "insert into notifications (recipient_id, type, payload) values ($1, 'trip_assigned', $2)",
-        [driverId, JSON.stringify({ bookingId: booking.id, pickup, dropoff, scheduledAt })],
+        [driverId, JSON.stringify({ tripId, bookingId: booking.id, pickup, dropoff, scheduledAt, pickupState })],
       );
     } else {
       const drivers = await pool.query(
-        `select u.id from users u join user_roles ur on ur.user_id = u.id and ur.role = 'driver'
-         join driver_profiles dp on dp.user_id = u.id and dp.verification_status = 'Approved'`,
+        `select dp.user_id as id, dp.state from driver_profiles dp
+         where dp.verification_status = 'Approved'`,
       );
       for (const d of drivers.rows) {
+        const dState = (d.state as string | null)?.trim().toUpperCase() || "";
+        const stateOk = !pickupState || !dState || dState === pickupState;
+        if (!stateOk) continue;
         await pool.query(
           "insert into notifications (recipient_id, type, payload) values ($1, 'new_ride_request', $2)",
-          [d.id, JSON.stringify({ bookingId: booking.id, pickup, dropoff, scheduledAt })],
+          [
+            d.id,
+            JSON.stringify({
+              tripId,
+              bookingId: booking.id,
+              pickup,
+              dropoff,
+              scheduledAt,
+              pickupState,
+            }),
+          ],
         );
       }
     }
@@ -1199,21 +1309,83 @@ app.patch("/admin/trips/:id/assign", async (req, res) => {
   }
 });
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 app.get("/admin/trips", async (req, res) => {
   try {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["admin"]);
-    const result = await pool.query(
-      `select t.id, t.state, t.driver_id, t.assigned_at, t.created_at,
-              b.pickup, b.dropoff, b.scheduled_at, b.rider_id,
-              rp.full_name as rider_name, dp.full_name as driver_name
+    const stateFilter = String(req.query.state ?? "").trim();
+    const q = String(req.query.q ?? "").trim();
+    const from = String(req.query.from ?? "").trim();
+    const to = String(req.query.to ?? "").trim();
+    const riderId = String(req.query.riderId ?? "").trim();
+    const driverId = String(req.query.driverId ?? "").trim();
+    const tripId = String(req.query.tripId ?? "").trim();
+    const limit = Math.min(Math.max(Number(req.query.limit) || 500, 1), 500);
+
+    let sql = `
+      select t.id, t.state, t.booking_id, t.driver_id, t.assigned_at, t.created_at,
+             t.admin_quality_notes,
+             b.pickup, b.dropoff, b.scheduled_at, b.rider_id, b.mobility_needs, b.notes as booking_notes,
+             rp.full_name as rider_name, dp.full_name as driver_name
        from trips t
        join bookings b on b.id = t.booking_id
        left join rider_profiles rp on rp.user_id = b.rider_id
        left join driver_profiles dp on dp.user_id = t.driver_id
-       order by t.created_at desc
-       limit 500`,
-    );
+       left join users ru on ru.id = b.rider_id
+       left join users du on du.id = t.driver_id
+       where 1=1`;
+    const params: unknown[] = [];
+    let p = 1;
+    if (stateFilter && stateFilter !== "all") {
+      sql += ` and t.state = $${p}`;
+      params.push(stateFilter);
+      p++;
+    }
+    if (tripId) {
+      if (!UUID_RE.test(tripId)) return res.status(400).json({ error: "tripId must be a valid UUID" });
+      sql += ` and t.id = $${p}::uuid`;
+      params.push(tripId);
+      p++;
+    }
+    if (q) {
+      sql += ` and (
+        b.pickup ilike $${p} or b.dropoff ilike $${p}
+        or coalesce(rp.full_name,'') ilike $${p}
+        or cast(t.id as text) ilike $${p}
+        or ru.email ilike $${p}
+        or coalesce(dp.full_name,'') ilike $${p}
+        or coalesce(du.email,'') ilike $${p}
+      )`;
+      params.push(`%${q}%`);
+      p++;
+    }
+    if (from) {
+      sql += ` and b.scheduled_at >= $${p}::timestamptz`;
+      params.push(from);
+      p++;
+    }
+    if (to) {
+      sql += ` and b.scheduled_at <= $${p}::timestamptz`;
+      params.push(to);
+      p++;
+    }
+    if (riderId) {
+      if (!UUID_RE.test(riderId)) return res.status(400).json({ error: "riderId must be a valid UUID" });
+      sql += ` and b.rider_id = $${p}::uuid`;
+      params.push(riderId);
+      p++;
+    }
+    if (driverId) {
+      if (!UUID_RE.test(driverId)) return res.status(400).json({ error: "driverId must be a valid UUID" });
+      sql += ` and t.driver_id = $${p}::uuid`;
+      params.push(driverId);
+      p++;
+    }
+    sql += ` order by t.created_at desc limit $${p}`;
+    params.push(limit);
+    const result = await pool.query(sql, params);
     return res.json({ items: result.rows });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
@@ -1228,18 +1400,42 @@ app.get("/admin/activity", async (req, res) => {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["admin"]);
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
-    // Limit rows before joining users so large activity_log tables cannot full-scan + sort under nginx 504.
+    const actionQ = String(req.query.action ?? "").trim();
+    const entityType = String(req.query.entityType ?? "").trim();
+    const userId = String(req.query.userId ?? "").trim();
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    const safeAction = actionQ.replace(/[%_\\]/g, "");
+    if (safeAction) {
+      conditions.push(`action ilike $${params.length + 1}`);
+      params.push(`%${safeAction}%`);
+    }
+    if (entityType) {
+      conditions.push(`entity_type = $${params.length + 1}`);
+      params.push(entityType);
+    }
+    if (userId) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(userId)) {
+        return res.status(400).json({ error: "userId must be a valid UUID" });
+      }
+      conditions.push(`user_id = $${params.length + 1}::uuid`);
+      params.push(userId);
+    }
+    const innerWhere = conditions.length ? `where ${conditions.join(" and ")}` : "";
+    params.push(limit);
+    const limitIdx = params.length;
     const result = await pool.query(
       `select al.id, al.user_id, al.action, al.entity_type, al.entity_id, al.payload, al.created_at,
               u.email
        from (
          select id, user_id, action, entity_type, entity_id, payload, created_at
          from activity_log
+         ${innerWhere}
          order by created_at desc
-         limit $1
+         limit $${limitIdx}
        ) al
        left join users u on u.id = al.user_id`,
-      [limit],
+      params,
     );
     return res.json({ items: result.rows });
   } catch (error) {
@@ -1437,6 +1633,87 @@ app.post("/admin/settings/smtp/test", async (req, res) => {
       [result.delivered ? "success" : "fallback_log", claims.sub],
     );
     return res.json({ ok: true, result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/settings/platform", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const result = await pool.query(
+      `select auto_invoice_on_trip_complete, auto_email_invoice_to_rider, trip_progress_notifications, updated_at
+       from admin_platform_settings where id = 1`,
+    );
+    return res.json(
+      result.rows[0] ?? {
+        auto_invoice_on_trip_complete: true,
+        auto_email_invoice_to_rider: false,
+        trip_progress_notifications: true,
+      },
+    );
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.patch("/admin/settings/platform", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const cur = await pool.query(
+      "select auto_invoice_on_trip_complete, auto_email_invoice_to_rider, trip_progress_notifications from admin_platform_settings where id = 1",
+    );
+    const c = (cur.rows[0] as Record<string, boolean> | undefined) ?? {
+      auto_invoice_on_trip_complete: true,
+      auto_email_invoice_to_rider: false,
+      trip_progress_notifications: true,
+    };
+    const autoInvoice =
+      typeof req.body?.autoInvoiceOnTripComplete === "boolean" ? req.body.autoInvoiceOnTripComplete : c.auto_invoice_on_trip_complete;
+    const autoEmail =
+      typeof req.body?.autoEmailInvoiceToRider === "boolean" ? req.body.autoEmailInvoiceToRider : c.auto_email_invoice_to_rider;
+    const tripNotes =
+      typeof req.body?.tripProgressNotifications === "boolean" ? req.body.tripProgressNotifications : c.trip_progress_notifications;
+    await pool.query(
+      `insert into admin_platform_settings (id, auto_invoice_on_trip_complete, auto_email_invoice_to_rider, trip_progress_notifications, updated_at)
+       values (1, $1, $2, $3, now())
+       on conflict (id) do update set
+         auto_invoice_on_trip_complete = excluded.auto_invoice_on_trip_complete,
+         auto_email_invoice_to_rider = excluded.auto_email_invoice_to_rider,
+         trip_progress_notifications = excluded.trip_progress_notifications,
+         updated_at = excluded.updated_at`,
+      [autoInvoice, autoEmail, tripNotes],
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/notifications", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 80, 1), 200);
+    const result = await pool.query(
+      `select id, type, payload, read_at, created_at from notifications
+       where recipient_id = $1
+       order by created_at desc
+       limit $2`,
+      [claims.sub, limit],
+    );
+    return res.json({ items: result.rows });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
     console.error("[admin-service] Error:", error);

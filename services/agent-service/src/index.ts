@@ -1,4 +1,13 @@
-import { AppRole, hashPassword, pool, requireAuth, requireRole, runMigrations, sendGenericEmail } from "@lumi/shared";
+import {
+  AppRole,
+  hashPassword,
+  inferAuStateFromLocationText,
+  pool,
+  requireAuth,
+  requireRole,
+  runMigrations,
+  sendGenericEmail,
+} from "@lumi/shared";
 import crypto from "node:crypto";
 import express from "express";
 import cors from "cors";
@@ -692,17 +701,40 @@ function registerRoutes(prefix: "/partner" | "/agent") {
         );
       }
       const booking = inserted.rows[0] as { id: string };
-      await pool.query("insert into trips (booking_id, state) values ($1, 'pending_assignment')", [booking.id]);
+      const pickupState =
+        inferAuStateFromLocationText(pickup) ||
+        (typeof req.body?.pickupState === "string" ? String(req.body.pickupState).trim().toUpperCase().slice(0, 3) : null);
+      if (pickupState) {
+        await pool.query("update bookings set pickup_state = $1 where id = $2", [pickupState, booking.id]);
+      }
+
+      const tripIns = await pool.query(
+        "insert into trips (booking_id, state) values ($1, 'pending_assignment') returning id",
+        [booking.id],
+      );
+      const tripId = tripIns.rows[0]?.id as string;
 
       const drivers = await pool.query(
-        `select u.id from users u
-         join user_roles ur on ur.user_id = u.id and ur.role = 'driver'
-         join driver_profiles dp on dp.user_id = u.id and dp.verification_status = 'Approved'`,
+        `select dp.user_id as id, dp.state from driver_profiles dp
+         where dp.verification_status = 'Approved'`,
       );
       for (const d of drivers.rows) {
+        const dState = (d.state as string | null)?.trim().toUpperCase() || "";
+        const stateOk = !pickupState || !dState || dState === pickupState;
+        if (!stateOk) continue;
         await pool.query(
           "insert into notifications (recipient_id, type, payload) values ($1, 'new_ride_request', $2)",
-          [d.id, JSON.stringify({ bookingId: booking.id, pickup, dropoff, scheduledAt })],
+          [
+            d.id,
+            JSON.stringify({
+              tripId,
+              bookingId: booking.id,
+              pickup,
+              dropoff,
+              scheduledAt,
+              pickupState,
+            }),
+          ],
         );
       }
       return res.status(201).json({ booking: inserted.rows[0] });

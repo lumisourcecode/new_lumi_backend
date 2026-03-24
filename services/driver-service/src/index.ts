@@ -10,6 +10,86 @@ import cors from "cors";
 
 const app = express();
 const port = Number(process.env.DRIVER_SERVICE_PORT ?? 4300);
+const BILLING_BASE = String(process.env.BILLING_SERVICE_URL ?? "").trim() || `http://127.0.0.1:${process.env.BILLING_SERVICE_PORT ?? 4600}`;
+const BILLING_SECRET = String(process.env.BILLING_INTERNAL_SECRET ?? "").trim();
+
+async function billingPost(path: string, body: Record<string, unknown>): Promise<{ ok: boolean; json?: unknown; err?: string }> {
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (BILLING_SECRET) headers["x-internal-secret"] = BILLING_SECRET;
+    const r = await fetch(`${BILLING_BASE.replace(/\/$/, "")}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    const text = await r.text();
+    let json: unknown;
+    try {
+      json = JSON.parse(text) as unknown;
+    } catch {
+      json = text;
+    }
+    if (!r.ok) return { ok: false, err: typeof json === "string" ? json : JSON.stringify(json) };
+    return { ok: true, json };
+  } catch (e) {
+    return { ok: false, err: e instanceof Error ? e.message : "billing fetch failed" };
+  }
+}
+
+async function notifyTripProgress(opts: {
+  driverId: string;
+  riderId: string;
+  tripId: string;
+  step: string;
+  label: string;
+  pickup: string;
+  dropoff: string;
+  riderName: string;
+}) {
+  const platform = await pool.query("select trip_progress_notifications from admin_platform_settings where id = 1");
+  const enabled = !platform.rowCount || platform.rows[0]?.trip_progress_notifications !== false;
+  if (!enabled) return;
+
+  const payload = JSON.stringify({
+    tripId: opts.tripId,
+    step: opts.step,
+    title: opts.label,
+    message: `${opts.label}: ${opts.pickup} → ${opts.dropoff}`,
+    riderName: opts.riderName,
+  });
+  const type = `trip_${opts.step}`;
+  await pool.query(`insert into notifications (recipient_id, type, payload) values ($1, $2, $3)`, [
+    opts.riderId,
+    type,
+    payload,
+  ]);
+  const admins = await pool.query(`select distinct user_id from user_roles where role = 'admin'`);
+  for (const row of admins.rows) {
+    await pool.query(`insert into notifications (recipient_id, type, payload) values ($1, 'admin_trip_update', $2)`, [
+      row.user_id,
+      payload,
+    ]);
+  }
+  await pool.query(
+    `insert into activity_log (user_id, action, entity_type, entity_id, payload) values ($1, $2, 'trip', $3, $4)`,
+    [opts.driverId, `trip_${opts.step}`, opts.tripId, payload],
+  );
+}
+
+async function maybeAutoInvoice(tripId: string) {
+  const cfg = await pool.query(
+    "select auto_invoice_on_trip_complete, auto_email_invoice_to_rider from admin_platform_settings where id = 1",
+  );
+  const row = cfg.rows[0] as { auto_invoice_on_trip_complete?: boolean; auto_email_invoice_to_rider?: boolean } | undefined;
+  const autoInv = row?.auto_invoice_on_trip_complete !== false;
+  const autoMail = row?.auto_email_invoice_to_rider === true;
+  if (!autoInv) return;
+  const result = await billingPost("/internal/process-trip", {
+    tripId,
+    sendEmailToRider: autoMail,
+  });
+  if (!result.ok) console.error("[driver-service] auto invoice failed:", result.err);
+}
 
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
@@ -453,10 +533,11 @@ app.get("/driver/manifest", async (req, res) => {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["driver"]);
     const result = await pool.query(
-      `select t.id, t.state, t.created_at, t.assigned_at, b.pickup, b.dropoff, b.scheduled_at, b.mobility_needs, b.notes,
-              rp.full_name as rider_name, rp.phone as rider_phone
+      `select t.id, t.state, t.driver_route_phase, t.created_at, t.assigned_at, b.pickup, b.dropoff, b.scheduled_at, b.mobility_needs, b.notes,
+              rp.full_name as rider_name, rp.phone as rider_phone, ru.email as rider_email
        from trips t
        join bookings b on b.id = t.booking_id
+       join users ru on ru.id = b.rider_id
        left join rider_profiles rp on rp.user_id = b.rider_id
        where t.driver_id = $1
        order by t.created_at desc
@@ -478,7 +559,7 @@ app.get("/driver/available-trips", async (req, res) => {
     requireRole(claims, ["driver"]);
     
     const dp = await pool.query(
-      "select last_lat, last_lng, verification_status from driver_profiles where user_id = $1",
+      "select last_lat, last_lng, verification_status, state from driver_profiles where user_id = $1",
       [claims.sub],
     );
     if (!dp.rowCount || dp.rows[0]?.verification_status !== "Approved") {
@@ -486,16 +567,21 @@ app.get("/driver/available-trips", async (req, res) => {
     }
 
     const { last_lat: dLat, last_lng: dLng } = dp.rows[0];
+    const driverStateRaw = (dp.rows[0]?.state as string | null)?.trim();
+    const driverState = driverStateRaw ? driverStateRaw.toUpperCase() : null;
 
     const result = await pool.query(
       `select t.id, t.created_at, b.pickup, b.dropoff, b.scheduled_at, b.mobility_needs, b.pickup_lat, b.pickup_lng,
+              b.pickup_state,
               t.estimated_cost, t.distance_km, rp.full_name as rider_name
        from trips t
        join bookings b on b.id = t.booking_id
        left join rider_profiles rp on rp.user_id = b.rider_id
        where t.driver_id is null and t.state = 'pending_assignment'
+         and ($1::text is null or length(trim($1)) = 0 or b.pickup_state is null or upper(trim(b.pickup_state)) = $1)
        order by b.scheduled_at asc
        limit 50`,
+      [driverState],
     );
 
     const itemsWithDist = result.rows.map(r => {
@@ -505,7 +591,14 @@ app.get("/driver/available-trips", async (req, res) => {
       return { ...r, distanceToPickup: dist ? dist.toFixed(1) + "km" : "Global" };
     });
 
-    return res.json({ items: itemsWithDist });
+    return res.json({
+      items: itemsWithDist,
+      driverServiceState: driverState,
+      filterNote:
+        driverState ?
+          `Showing open trips for ${driverState} (and unclassified). Set your state in Profile/Onboarding if this list is empty.`
+        : "Add your home state in your profile to only see rides in that region.",
+    });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
     console.error("[driver-service] Error:", error);
@@ -529,10 +622,111 @@ app.post("/driver/trips/:tripId/accept", async (req, res) => {
     );
 
     if (!updated.rowCount) {
-      return res.status(409).json({ error: "Trip no longer available or already accepted" });
+      const cur = await pool.query("select state, driver_id from trips where id = $1", [tripId]);
+      const row = cur.rows[0] as { state: string; driver_id: string | null } | undefined;
+      if (!row) {
+        return res.status(404).json({ error: "Trip not found" });
+      }
+      if (row.driver_id && row.driver_id !== claims.sub) {
+        return res.status(409).json({ error: "Another driver already accepted this trip", code: "ASSIGNED_TO_OTHER" });
+      }
+      return res.status(409).json({
+        error: "Trip is no longer open for acceptance",
+        code: "NOT_OPEN",
+        currentState: row.state,
+      });
     }
 
     return res.json({ ok: true });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.patch("/driver/trips/:tripId/progress", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["driver"]);
+    const tripId = req.params.tripId;
+    const phase = String((req.body as { phase?: string })?.phase ?? "").trim();
+    const row = await pool.query(
+      `select t.id, t.state, t.driver_id, t.driver_route_phase, t.booking_id,
+              b.rider_id, b.pickup, b.dropoff, rp.full_name as rider_name
+       from trips t
+       join bookings b on b.id = t.booking_id
+       left join rider_profiles rp on rp.user_id = b.rider_id
+       where t.id = $1`,
+      [tripId],
+    );
+    if (!row.rowCount || (row.rows[0] as { driver_id: string }).driver_id !== claims.sub) {
+      return res.status(404).json({ error: "Trip not found or not assigned to you" });
+    }
+    const t = row.rows[0] as Record<string, unknown>;
+    const riderName = String(t.rider_name || "Rider");
+    const pickup = String(t.pickup);
+    const dropoff = String(t.dropoff);
+    const riderId = String(t.rider_id);
+    const bookingId = String(t.booking_id);
+    const curPhase = String(t.driver_route_phase || "en_route_pickup");
+    const state = String(t.state);
+
+    if (phase === "at_pickup") {
+      if (state !== "Assigned" || curPhase !== "en_route_pickup") {
+        return res.status(400).json({ error: "Invalid transition to at_pickup" });
+      }
+      await pool.query("update trips set driver_route_phase = 'at_pickup' where id = $1", [tripId]);
+      await notifyTripProgress({
+        driverId: claims.sub,
+        riderId,
+        tripId,
+        step: "arrived_pickup",
+        label: "Driver arrived at pickup",
+        pickup,
+        dropoff,
+        riderName,
+      });
+      return res.json({ ok: true, driver_route_phase: "at_pickup", state });
+    }
+    if (phase === "passenger_onboard") {
+      if (state !== "Assigned" || curPhase !== "at_pickup") {
+        return res.status(400).json({ error: "Mark arrived at pickup before passenger on board" });
+      }
+      await pool.query("update trips set driver_route_phase = 'passenger_onboard', state = 'InProgress' where id = $1", [tripId]);
+      await notifyTripProgress({
+        driverId: claims.sub,
+        riderId,
+        tripId,
+        step: "passenger_onboard",
+        label: "Passenger on board — heading to drop-off",
+        pickup,
+        dropoff,
+        riderName,
+      });
+      return res.json({ ok: true, driver_route_phase: "passenger_onboard", state: "InProgress" });
+    }
+    if (phase === "dropped_off") {
+      if (state !== "InProgress" || curPhase !== "passenger_onboard") {
+        return res.status(400).json({ error: "Passenger must be on board before drop-off complete" });
+      }
+      await pool.query("update trips set driver_route_phase = 'dropped_off', state = 'Completed' where id = $1", [tripId]);
+      await pool.query("update bookings set status = 'completed' where id = $1", [bookingId]);
+      await notifyTripProgress({
+        driverId: claims.sub,
+        riderId,
+        tripId,
+        step: "completed",
+        label: "Trip completed",
+        pickup,
+        dropoff,
+        riderName,
+      });
+      await maybeAutoInvoice(tripId);
+      return res.json({ ok: true, driver_route_phase: "dropped_off", state: "Completed" });
+    }
+    return res.status(400).json({ error: "phase must be at_pickup, passenger_onboard, or dropped_off" });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
     console.error("[driver-service] Error:", error);
@@ -553,20 +747,87 @@ app.patch("/driver/trips/:tripId/state", async (req, res) => {
       return res.status(400).json({ error: "state must be Assigned, InProgress, or Completed" });
     }
     const updated = await pool.query(
-      `update trips set state = $1 where id = $2 and driver_id = $3 returning id, state`,
+      `update trips set state = $1 where id = $2 and driver_id = $3 returning id, state, booking_id, driver_route_phase`,
       [state, tripId, claims.sub],
     );
     if (!updated.rowCount) {
       return res.status(404).json({ error: "Trip not found or not assigned to you" });
     }
-    if (state === "Completed") {
+    const meta = updated.rows[0] as { id: string; state: string; booking_id: string; driver_route_phase: string };
+    if (state === "InProgress") {
       await pool.query(
-        "update bookings set status = 'completed' where id = (select booking_id from trips where id = $1)",
+        "update trips set driver_route_phase = case when driver_route_phase = 'dropped_off' then driver_route_phase else 'passenger_onboard' end where id = $1",
         [tripId],
       );
+      const info = await pool.query(
+        `select b.rider_id, b.pickup, b.dropoff, rp.full_name as rider_name from trips t
+         join bookings b on b.id = t.booking_id
+         left join rider_profiles rp on rp.user_id = b.rider_id where t.id = $1`,
+        [tripId],
+      );
+      const r = info.rows[0] as Record<string, unknown> | undefined;
+      if (r) {
+        await notifyTripProgress({
+          driverId: claims.sub,
+          riderId: String(r.rider_id),
+          tripId,
+          step: "passenger_onboard",
+          label: "Trip in progress",
+          pickup: String(r.pickup),
+          dropoff: String(r.dropoff),
+          riderName: String(r.rider_name || "Rider"),
+        });
+      }
+    }
+    if (state === "Completed") {
+      await pool.query("update trips set driver_route_phase = 'dropped_off' where id = $1", [tripId]);
+      await pool.query("update bookings set status = 'completed' where id = $1", [meta.booking_id]);
+      const info = await pool.query(
+        `select b.rider_id, b.pickup, b.dropoff, rp.full_name as rider_name from trips t
+         join bookings b on b.id = t.booking_id
+         left join rider_profiles rp on rp.user_id = b.rider_id where t.id = $1`,
+        [tripId],
+      );
+      const r = info.rows[0] as Record<string, unknown> | undefined;
+      if (r) {
+        await notifyTripProgress({
+          driverId: claims.sub,
+          riderId: String(r.rider_id),
+          tripId,
+          step: "completed",
+          label: "Trip completed",
+          pickup: String(r.pickup),
+          dropoff: String(r.dropoff),
+          riderName: String(r.rider_name || "Rider"),
+        });
+      }
+      await maybeAutoInvoice(tripId);
     }
     const row = updated.rows[0] as { id: string; state: string };
     return res.json({ trip: { id: row.id, state: row.state } });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[driver-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.post("/driver/trips/:tripId/send-invoice-email", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["driver"]);
+    const tripId = req.params.tripId;
+    const to = String((req.body as { to?: string })?.to ?? "").trim();
+    if (!to) return res.status(400).json({ error: "to (email) is required" });
+    const ok = await pool.query(
+      "select 1 from trips where id = $1 and driver_id = $2 and state = 'Completed'",
+      [tripId, claims.sub],
+    );
+    if (!ok.rowCount) return res.status(400).json({ error: "Trip must be completed and assigned to you" });
+    const result = await billingPost("/internal/send-trip-invoice", { tripId, to });
+    if (!result.ok) return res.status(502).json({ error: result.err ?? "Billing service error" });
+    return res.json({ ok: true, result: result.json });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
     console.error("[driver-service] Error:", error);

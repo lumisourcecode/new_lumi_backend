@@ -5,6 +5,7 @@ import {
   runMigrations,
   calculateEstimatedPrice,
   calculateHaversineDistance,
+  inferAuStateFromLocationText,
 } from "@lumi/shared";
 import express from "express";
 import cors from "cors";
@@ -271,42 +272,59 @@ app.post("/rider/bookings", async (req, res) => {
       );
     }
     const booking = inserted.rows[0] as { id: string };
+    const pickupState =
+      inferAuStateFromLocationText(String(pickup)) ||
+      (typeof req.body?.pickupState === "string" ? String(req.body.pickupState).trim().toUpperCase().slice(0, 3) : null);
 
-    // Create Trip with estimated cost
-    await pool.query(
+    if (pickupState) {
+      await pool.query("update bookings set pickup_state = $1 where id = $2", [pickupState, booking.id]);
+    }
+
+    const tripIns = await pool.query(
       `insert into trips (booking_id, state, estimated_cost, final_cost, distance_km, duration_minutes) 
-       values ($1, 'pending_assignment', $2, $2, $3, $4)`,
+       values ($1, 'pending_assignment', $2, $2, $3, $4) returning id`,
       [booking.id, pricing.total, distanceEst, Math.round(distanceEst * 2.5)],
     );
+    const tripId = tripIns.rows[0]?.id as string;
 
-    // Phase 4: Nearby Proximity Dispatch (5km Radius)
     const activeDrivers = await pool.query(
-      `select dp.user_id, dp.last_lat, dp.last_lng from driver_profiles dp
-       where dp.verification_status = 'Approved'`
+      `select dp.user_id, dp.last_lat, dp.last_lng, dp.state from driver_profiles dp
+       where dp.verification_status = 'Approved'`,
     );
 
-    const notifications = [];
+    const notifications: Promise<unknown>[] = [];
     for (const driver of activeDrivers.rows) {
-      const dist = (driver.last_lat && driver.last_lng && pickupLat && pickupLng)
-        ? calculateHaversineDistance(driver.last_lat, driver.last_lng, pickupLat, pickupLng)
-        : null;
+      const dState = (driver.state as string | null)?.trim().toUpperCase() || "";
+      const stateOk = !pickupState || !dState || dState === pickupState;
+      if (!stateOk) continue;
 
-      // Notify if within 5km, or if coordinates are missing (global broadcast as fallback)
-      if (dist === null || dist <= 5.0) {
-        notifications.push(pool.query(
-          "insert into notifications (recipient_id, type, payload) values ($1, 'new_ride_request', $2)",
-          [driver.user_id, JSON.stringify({ 
-            bookingId: booking.id, 
-            pickup, 
-            dropoff, 
-            scheduledAt, 
-            price: pricing.total,
-            distance: distanceEst.toFixed(1) + "km"
-          })]
-        ));
+      const dist =
+        driver.last_lat && driver.last_lng && pickupLat && pickupLng
+          ? calculateHaversineDistance(driver.last_lat, driver.last_lng, pickupLat, pickupLng)
+          : null;
+
+      if (dist === null || dist <= 25) {
+        notifications.push(
+          pool.query(
+            "insert into notifications (recipient_id, type, payload) values ($1, 'new_ride_request', $2)",
+            [
+              driver.user_id,
+              JSON.stringify({
+                tripId,
+                bookingId: booking.id,
+                pickup,
+                dropoff,
+                scheduledAt,
+                pickupState,
+                price: pricing.total,
+                distance: distanceEst.toFixed(1) + "km",
+              }),
+            ],
+          ),
+        );
       }
     }
-    
+
     await Promise.all(notifications);
 
     return res.status(201).json({ 

@@ -287,6 +287,22 @@ alter table trips add column if not exists currency text default 'AUD';
 alter table trips add column if not exists ndis_support_item text;
 alter table trips add column if not exists distance_km numeric(10,2);
 alter table trips add column if not exists duration_minutes integer;
+alter table trips add column if not exists admin_quality_notes text;
+alter table trips add column if not exists driver_route_phase text not null default 'en_route_pickup';
+
+update trips set driver_route_phase = 'dropped_off' where state = 'Completed';
+update trips set driver_route_phase = 'passenger_onboard' where state = 'InProgress';
+
+create table if not exists admin_platform_settings (
+  id int primary key default 1,
+  auto_invoice_on_trip_complete boolean not null default true,
+  auto_email_invoice_to_rider boolean not null default false,
+  trip_progress_notifications boolean not null default true,
+  updated_at timestamptz not null default now(),
+  constraint admin_platform_settings_singleton check (id = 1)
+);
+insert into admin_platform_settings (id)
+select 1 where not exists (select 1 from admin_platform_settings where id = 1);
 
 create table if not exists invoices (
   id uuid primary key default gen_random_uuid(),
@@ -403,6 +419,9 @@ create table if not exists admin_permission_matrix (
   updated_at timestamptz not null default now(),
   unique(role, entity)
 );
+
+alter table bookings add column if not exists pickup_state text;
+create index if not exists idx_bookings_pickup_state on bookings (pickup_state);
 `;
 
 /** One lock for all services — PM2 starts auth/rider/driver/partner/admin/billing together; without this they can race on the same DDL and crash-loop. */
