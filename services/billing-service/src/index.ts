@@ -1,13 +1,12 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import { 
-  pool, 
-  requireAuth, 
+import {
+  pool,
+  requireAuth,
   requireRole,
   runMigrations,
   sendGenericEmail,
 } from "@lumi/shared";
+import express from "express";
+import cors from "cors";
 import { generateInvoicePDF, InvoiceData } from "./pdf-engine.js";
 
 const app = express();

@@ -1,4 +1,3 @@
-import "dotenv/config";
 import argon2 from "argon2";
 import jwt from "jsonwebtoken";
 import type { JwtClaims } from "./types.js";

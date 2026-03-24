@@ -1,8 +1,3 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-
-import crypto from "node:crypto";
 import {
   buildResetLink,
   googleAuthBodySchema,
@@ -22,6 +17,9 @@ import {
   verifyPassword,
   AppRole,
 } from "@lumi/shared";
+import crypto from "node:crypto";
+import express from "express";
+import cors from "cors";
   
 
 const app = express();
@@ -321,12 +319,19 @@ app.post("/auth/send-otp", async (req, res) => {
   const codeHash = crypto.createHash("sha256").update(code).digest("hex");
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
+  const sms = await sendSms(phone, `Your Lumi Ride verification code is ${code}. Valid for 10 minutes.`);
+  if (!sms.ok) {
+    console.error("[auth] send-otp Twilio failed:", sms.error);
+    return res.status(502).json({
+      error: "Could not send SMS. Check Twilio credentials and server logs.",
+      details: sms.error.slice(0, 800),
+    });
+  }
+
   await pool.query(
     "insert into phone_otps (phone, code_hash, portal, expires_at) values ($1, $2, $3, $4)",
     [phone, codeHash, portal, expiresAt],
   );
-
-  await sendSms(phone, `Your Lumi Ride verification code is ${code}. Valid for 10 minutes.`);
   // With Twilio test credentials no real SMS is sent; log code in dev so you can complete sign-in
   if (process.env.NODE_ENV !== "production" || process.env.LOG_OTP === "true") {
     console.log(`[OTP] ${phone} → code: ${code} (valid 10 min)`);

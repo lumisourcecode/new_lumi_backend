@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { Pool } from "pg";
 
 /** Each microservice process has its own pool. Default pg max=10 with connectionTimeoutMillis=0 waits forever when busy → nginx 504. */

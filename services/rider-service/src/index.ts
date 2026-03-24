@@ -1,14 +1,13 @@
-import "dotenv/config";
+import {
+  pool,
+  requireAuth,
+  requireRole,
+  runMigrations,
+  calculateEstimatedPrice,
+  calculateHaversineDistance,
+} from "@lumi/shared";
 import express from "express";
 import cors from "cors";
-import { 
-  pool, 
-  requireAuth, 
-  requireRole, 
-  runMigrations,
-  calculateEstimatedPrice, 
-  calculateHaversineDistance 
-} from "@lumi/shared";
 
 const app = express();
 const port = Number(process.env.RIDER_SERVICE_PORT ?? 4200);

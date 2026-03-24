@@ -1,3 +1,5 @@
+import "./load-env.js";
+
 export * from "./types.js";
 export * from "./auth.js";
 export * from "./db/client.js";

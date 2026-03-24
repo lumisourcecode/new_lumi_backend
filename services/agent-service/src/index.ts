@@ -1,9 +1,7 @@
-import "dotenv/config";
+import { AppRole, hashPassword, pool, requireAuth, requireRole, runMigrations, sendGenericEmail } from "@lumi/shared";
+import crypto from "node:crypto";
 import express from "express";
 import cors from "cors";
-import crypto from "node:crypto";
-
-import { AppRole, hashPassword, pool, requireAuth, requireRole, runMigrations, sendGenericEmail } from "@lumi/shared";
 
 const app = express();
 const port = Number(process.env.PARTNER_SERVICE_PORT ?? process.env.AGENT_SERVICE_PORT ?? 4400);

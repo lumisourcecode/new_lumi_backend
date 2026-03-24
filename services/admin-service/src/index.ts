@@ -1,7 +1,3 @@
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-
 import {
   adminChangePasswordBodySchema,
   createUserBodySchema,
@@ -13,6 +9,8 @@ import {
   sendGenericEmail,
   sendNewPasswordEmail,
 } from "@lumi/shared";
+import express from "express";
+import cors from "cors";
 
 const SUPER_ADMIN_EMAIL = (process.env.ADMIN_EMAIL ?? "admin@lumiride.com").toLowerCase().trim();
 const app = express();
