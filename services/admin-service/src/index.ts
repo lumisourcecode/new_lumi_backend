@@ -1229,14 +1229,18 @@ app.get("/admin/activity", async (req, res) => {
   try {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["admin"]);
-    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    // Limit rows before joining users so large activity_log tables cannot full-scan + sort under nginx 504.
     const result = await pool.query(
       `select al.id, al.user_id, al.action, al.entity_type, al.entity_id, al.payload, al.created_at,
               u.email
-       from activity_log al
-       left join users u on u.id = al.user_id
-       order by al.created_at desc
-       limit $1`,
+       from (
+         select id, user_id, action, entity_type, entity_id, payload, created_at
+         from activity_log
+         order by created_at desc
+         limit $1
+       ) al
+       left join users u on u.id = al.user_id`,
       [limit],
     );
     return res.json({ items: result.rows });

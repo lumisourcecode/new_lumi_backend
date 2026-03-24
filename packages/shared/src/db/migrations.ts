@@ -136,6 +136,8 @@ create table if not exists activity_log (
   created_at timestamptz not null default now()
 );
 
+create index if not exists idx_activity_log_created_at on activity_log (created_at desc);
+
 create table if not exists notifications (
   id uuid primary key default gen_random_uuid(),
   recipient_id uuid not null references users(id) on delete cascade,
