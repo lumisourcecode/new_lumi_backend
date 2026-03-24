@@ -210,6 +210,11 @@ app.get("/admin/users/:id", async (req, res) => {
       "select count(*) as c from partner_clients where partner_id = $1",
       [id],
     );
+    const tripsCount = await pool.query("select count(*) as c from trips where driver_id = $1", [id]);
+    const supportTicketsCount = await pool.query(
+      "select count(*) as c from support_tickets where created_by = $1",
+      [id],
+    );
     return res.json({
       user: { ...user, roles },
       riderProfile: rider.rows[0] ?? null,
@@ -218,6 +223,8 @@ app.get("/admin/users/:id", async (req, res) => {
       adminProfile: admin.rows[0] ?? null,
       bookingsCount: Number(bookingsCount.rows[0]?.c ?? 0),
       partnerClientsCount: Number(partnerClientsCount.rows[0]?.c ?? 0),
+      tripsCount: Number(tripsCount.rows[0]?.c ?? 0),
+      supportTicketsCount: Number(supportTicketsCount.rows[0]?.c ?? 0),
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
@@ -324,6 +331,33 @@ app.get("/admin/users/:id/relationships", async (req, res) => {
       [id],
     );
     return res.json({ partnerClients: partnerClients.rows, riderPartners: riderPartners.rows });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[admin-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
+app.get("/admin/users/:id/support-tickets", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const { id } = req.params;
+    const status = String(req.query.status ?? "").trim();
+    const params: unknown[] = [id];
+    let sql = `
+      select st.id, st.created_by, st.role, st.issue_type, st.reference_id, st.priority, st.message, st.status, st.created_at, st.updated_at
+      from support_tickets st
+      where st.created_by = $1
+    `;
+    if (status) {
+      sql += " and st.status = $2";
+      params.push(status);
+    }
+    sql += " order by st.created_at desc limit 200";
+    const rows = await pool.query(sql, params);
+    return res.json({ items: rows.rows });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
     console.error("[admin-service] Error:", error);
@@ -1001,8 +1035,15 @@ app.get("/admin/bookings", async (req, res) => {
   try {
     const claims = requireAuth(req.headers.authorization);
     requireRole(claims, ["admin"]);
-    const result = await pool.query(
-      `select b.id, b.rider_id, b.pickup, b.dropoff, b.pickup_lat, b.pickup_lng, b.dropoff_lat, b.dropoff_lng,
+    const statusFilter = String(req.query.status ?? "").trim();
+    const tripState = String(req.query.tripState ?? "").trim();
+    const q = String(req.query.q ?? "").trim();
+    const from = String(req.query.from ?? "").trim();
+    const to = String(req.query.to ?? "").trim();
+    const riderId = String(req.query.riderId ?? "").trim();
+
+    let sql = `
+      select b.id, b.rider_id, b.pickup, b.dropoff, b.pickup_lat, b.pickup_lng, b.dropoff_lat, b.dropoff_lng,
               b.scheduled_at, b.status, b.mobility_needs, b.notes, b.created_at,
               rp.full_name as rider_name, rp.phone as rider_phone, u.email as rider_email,
               t.id as trip_id, t.state as trip_state, t.driver_id,
@@ -1013,9 +1054,45 @@ app.get("/admin/bookings", async (req, res) => {
        left join trips t on t.booking_id = b.id
        left join users du on du.id = t.driver_id
        left join driver_profiles dp on dp.user_id = t.driver_id
-       order by b.created_at desc
-       limit 500`,
-    );
+       where 1=1`;
+    const params: unknown[] = [];
+    let p = 1;
+    if (statusFilter && statusFilter !== "all") {
+      sql += ` and b.status = $${p}`;
+      params.push(statusFilter);
+      p++;
+    }
+    if (tripState && tripState !== "all") {
+      if (tripState === "unassigned") {
+        sql += " and t.id is null";
+      } else {
+        sql += ` and t.state = $${p}`;
+        params.push(tripState);
+        p++;
+      }
+    }
+    if (q) {
+      sql += ` and (b.pickup ilike $${p} or b.dropoff ilike $${p} or u.email ilike $${p} or coalesce(rp.full_name,'') ilike $${p})`;
+      params.push(`%${q}%`);
+      p++;
+    }
+    if (from) {
+      sql += ` and b.scheduled_at >= $${p}::timestamptz`;
+      params.push(from);
+      p++;
+    }
+    if (to) {
+      sql += ` and b.scheduled_at <= $${p}::timestamptz`;
+      params.push(to);
+      p++;
+    }
+    if (riderId) {
+      sql += ` and b.rider_id = $${p}`;
+      params.push(riderId);
+      p++;
+    }
+    sql += " order by b.created_at desc limit 500";
+    const result = await pool.query(sql, params);
     return res.json({ items: result.rows });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Server Error";
