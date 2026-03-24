@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import { pool, requireAuth, requireRole, calculateHaversineDistance } from "@lumi/shared";
+import { pool, requireAuth, requireRole, runMigrations, calculateHaversineDistance } from "@lumi/shared";
 
 const app = express();
 const port = Number(process.env.DRIVER_SERVICE_PORT ?? 4300);
@@ -233,6 +233,15 @@ app.post("/driver/trips/:tripId/accept", async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`driver-service listening on ${port}`);
-});
+async function start() {
+  try {
+    await runMigrations();
+  } catch (error) {
+    console.error("[driver-service] migration warning:", error);
+  }
+  app.listen(port, () => {
+    console.log(`driver-service listening on ${port}`);
+  });
+}
+
+void start();

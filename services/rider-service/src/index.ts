@@ -5,6 +5,7 @@ import {
   pool, 
   requireAuth, 
   requireRole, 
+  runMigrations,
   calculateEstimatedPrice, 
   calculateHaversineDistance 
 } from "@lumi/shared";
@@ -149,6 +150,67 @@ app.get("/rider/bookings", async (req, res) => {
   }
 });
 
+app.get("/rider/nearby-drivers", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["rider"]);
+    const pickupLatRaw = req.query.pickupLat;
+    const pickupLngRaw = req.query.pickupLng;
+    let pickupLat = pickupLatRaw != null ? Number(pickupLatRaw) : NaN;
+    let pickupLng = pickupLngRaw != null ? Number(pickupLngRaw) : NaN;
+    if (!Number.isFinite(pickupLat) || !Number.isFinite(pickupLng)) {
+      const latest = await pool.query(
+        `select pickup_lat, pickup_lng
+         from bookings
+         where rider_id = $1 and pickup_lat is not null and pickup_lng is not null
+         order by created_at desc
+         limit 1`,
+        [claims.sub],
+      );
+      pickupLat = Number(latest.rows[0]?.pickup_lat);
+      pickupLng = Number(latest.rows[0]?.pickup_lng);
+    }
+
+    const drivers = await pool.query(
+      `select dp.user_id as id, dp.full_name, dp.vehicle_rego, dp.last_lat, dp.last_lng
+       from driver_profiles dp
+       where dp.verification_status = 'Approved'
+       order by dp.last_ping_at desc nulls last
+       limit 60`,
+    );
+
+    const items = drivers.rows
+      .map((d) => {
+        const dLat = Number(d.last_lat);
+        const dLng = Number(d.last_lng);
+        const canDistance = Number.isFinite(pickupLat) && Number.isFinite(pickupLng) && Number.isFinite(dLat) && Number.isFinite(dLng);
+        const distanceKm = canDistance ? calculateHaversineDistance(pickupLat, pickupLng, dLat, dLng) : null;
+        return {
+          id: String(d.id),
+          full_name: d.full_name as string | undefined,
+          vehicle_rego: d.vehicle_rego as string | undefined,
+          distance_km: distanceKm == null ? null : Number(distanceKm.toFixed(2)),
+          eta_min: distanceKm == null ? null : Math.max(2, Math.round(distanceKm * 2.5)),
+        };
+      })
+      .filter((row) => row.distance_km == null || row.distance_km <= 25)
+      .sort((a, b) => {
+        if (a.distance_km == null && b.distance_km == null) return 0;
+        if (a.distance_km == null) return 1;
+        if (b.distance_km == null) return -1;
+        return a.distance_km - b.distance_km;
+      })
+      .slice(0, 12);
+
+    return res.json({ items });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Server Error";
+    console.error("[rider-service] Error:", error);
+    const status = msg === "Unauthorized" ? 401 : msg === "Forbidden" ? 403 : 500;
+    return res.status(status).json({ error: msg });
+  }
+});
+
 app.post("/rider/bookings", async (req, res) => {
   try {
     const claims = requireAuth(req.headers.authorization);
@@ -185,18 +247,30 @@ app.post("/rider/bookings", async (req, res) => {
       isNdis: !!isNdis
     });
 
-    const inserted = await pool.query(
-      `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes, is_ndis, vehicle_type_needed)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,'pending_matching',$9,$10,$11,$12)
-       returning id, pickup, dropoff, scheduled_at, status, created_at`,
-      [
-        claims.sub, pickup, dropoff, 
-        pickupLat || null, pickupLng || null, 
-        dropoffLat || null, dropoffLng || null, 
-        scheduledAt, mobilityNeeds || null, notes || null, 
-        !!isNdis, isAccessible ? "accessible" : "standard"
-      ],
-    );
+    let inserted;
+    try {
+      inserted = await pool.query(
+        `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes, is_ndis, vehicle_type_needed)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,'pending_matching',$9,$10,$11,$12)
+         returning id, pickup, dropoff, scheduled_at, status, created_at`,
+        [
+          claims.sub, pickup, dropoff, 
+          pickupLat || null, pickupLng || null, 
+          dropoffLat || null, dropoffLng || null, 
+          scheduledAt, mobilityNeeds || null, notes || null, 
+          !!isNdis, isAccessible ? "accessible" : "standard"
+        ],
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "";
+      if (!/pickup_lat|dropoff_lat|is_ndis|vehicle_type_needed/i.test(msg)) throw error;
+      inserted = await pool.query(
+        `insert into bookings (rider_id, pickup, dropoff, scheduled_at, status, mobility_needs, notes)
+         values ($1,$2,$3,$4,'pending_matching',$5,$6)
+         returning id, pickup, dropoff, scheduled_at, status, created_at`,
+        [claims.sub, pickup, dropoff, scheduledAt, mobilityNeeds || null, notes || null],
+      );
+    }
     const booking = inserted.rows[0] as { id: string };
 
     // Create Trip with estimated cost
@@ -288,6 +362,15 @@ app.get("/rider/notifications", async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`rider-service listening on ${port}`);
-});
+async function start() {
+  try {
+    await runMigrations();
+  } catch (error) {
+    console.error("[rider-service] migration warning:", error);
+  }
+  app.listen(port, () => {
+    console.log(`rider-service listening on ${port}`);
+  });
+}
+
+void start();

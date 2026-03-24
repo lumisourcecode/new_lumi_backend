@@ -430,6 +430,29 @@ app.post("/admin/users", async (req, res) => {
         "insert into partner_profiles (user_id, org_name, contact_name) values ($1, $2, $3) on conflict (user_id) do update set org_name = coalesce(excluded.org_name, partner_profiles.org_name), contact_name = coalesce(excluded.contact_name, partner_profiles.contact_name)",
         [userId, orgName ?? null, fullName ?? null],
       );
+      // First partner account acts as org admin/owner and can manage partner employees.
+      await pool.query(
+        `insert into partner_employees (partner_id, employee_user_id, title, permissions, status, invited_at, invited_by)
+         values ($1, $1, 'Organization Admin', $2::jsonb, 'active', now(), $3)
+         on conflict (partner_id, employee_user_id) do update set
+           title = excluded.title,
+           permissions = excluded.permissions,
+           status = 'active',
+           updated_at = now()`,
+        [
+          userId,
+          JSON.stringify({
+            org_admin: true,
+            employees_manage: true,
+            bookings_manage: true,
+            clients_manage: true,
+            plans_manage: true,
+            billing_manage: true,
+            settings_manage: true,
+          }),
+          claims.sub,
+        ],
+      );
     } else if (role === "admin") {
       await pool.query(
         "insert into admin_profiles (user_id, display_name) values ($1, $2) on conflict (user_id) do update set display_name = coalesce(excluded.display_name, admin_profiles.display_name)",
@@ -1014,12 +1037,24 @@ app.post("/admin/bookings", async (req, res) => {
     if (!riderId || !pickup || !dropoff || !scheduledAt) {
       return res.status(400).json({ error: "riderId, pickup, dropoff, scheduledAt are required" });
     }
-    const inserted = await pool.query(
-      `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes, created_by)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, 'pending_matching', $9, $10, $11)
-       returning id, pickup, dropoff, scheduled_at, status, created_at`,
-      [riderId, pickup, dropoff, pickupLat, pickupLng, dropoffLat, dropoffLng, scheduledAt, mobilityNeeds ?? null, notes ?? null, claims.sub],
-    );
+    let inserted;
+    try {
+      inserted = await pool.query(
+        `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes, created_by)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, 'pending_matching', $9, $10, $11)
+         returning id, pickup, dropoff, scheduled_at, status, created_at`,
+        [riderId, pickup, dropoff, pickupLat, pickupLng, dropoffLat, dropoffLng, scheduledAt, mobilityNeeds ?? null, notes ?? null, claims.sub],
+      );
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "";
+      if (!/pickup_lat|dropoff_lat/i.test(msg)) throw error;
+      inserted = await pool.query(
+        `insert into bookings (rider_id, pickup, dropoff, scheduled_at, status, mobility_needs, notes, created_by)
+         values ($1, $2, $3, $4, 'pending_matching', $5, $6, $7)
+         returning id, pickup, dropoff, scheduled_at, status, created_at`,
+        [riderId, pickup, dropoff, scheduledAt, mobilityNeeds ?? null, notes ?? null, claims.sub],
+      );
+    }
     const booking = inserted.rows[0] as { id: string };
     await pool.query(
       driverId

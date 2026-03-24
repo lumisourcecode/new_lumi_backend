@@ -231,6 +231,23 @@ alter table users add column if not exists phone text;
 alter table users add column if not exists google_id text;
 
 alter table user_roles drop constraint if exists user_roles_role_check;
+do $$
+declare c record;
+begin
+  -- Some older databases have differently named CHECK constraints on user_roles.role.
+  for c in
+    select con.conname
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_namespace nsp on nsp.oid = rel.relnamespace
+    where con.contype = 'c'
+      and nsp.nspname = 'public'
+      and rel.relname = 'user_roles'
+      and pg_get_constraintdef(con.oid) ilike '%role%'
+  loop
+    execute format('alter table public.user_roles drop constraint if exists %I', c.conname);
+  end loop;
+end $$;
 alter table user_roles add constraint user_roles_role_check check (role in ('rider','driver','partner','partner_employee','admin'));
 
 update user_roles set role = 'partner' where role = 'agent';
@@ -357,6 +374,15 @@ create table if not exists partner_employees (
   updated_at timestamptz not null default now(),
   unique(partner_id, employee_user_id)
 );
+
+-- Ensure each partner has an owner/admin seat mapped in partner_employees.
+insert into partner_employees (partner_id, employee_user_id, title, permissions, status, invited_at, created_at, updated_at)
+select u.id, u.id, 'Organization Admin',
+       '{"org_admin":true,"employees_manage":true,"bookings_manage":true,"clients_manage":true,"plans_manage":true,"billing_manage":true,"settings_manage":true}'::jsonb,
+       'active', now(), now(), now()
+from users u
+where exists (select 1 from user_roles ur where ur.user_id = u.id and ur.role = 'partner')
+on conflict (partner_id, employee_user_id) do nothing;
 
 create table if not exists admin_permission_matrix (
   id uuid primary key default gen_random_uuid(),

@@ -364,24 +364,25 @@ function registerRoutes(prefix: "/partner" | "/agent") {
   app.get(`${prefix}/stats`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);
-      requireRole(claims, ["partner"]);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
       const today = new Date().toISOString().slice(0, 10);
-      const clientsCount = await pool.query("select count(*) from partner_clients where partner_id = $1", [claims.sub]);
+      const clientsCount = await pool.query("select count(*) from partner_clients where partner_id = $1", [partnerId]);
       const ridesToday = await pool.query(
         `select count(*) from bookings b where b.created_by = $1 and b.scheduled_at::date = $2`,
-        [claims.sub, today],
+        [partnerId, today],
       );
       const inTransit = await pool.query(
         `select count(*) from trips t
          join bookings b on b.id = t.booking_id and b.created_by = $1
          where t.state not in ('Completed', 'Cancelled') and t.driver_id is not null`,
-        [claims.sub],
+        [partnerId],
       );
       const pending = await pool.query(
         `select count(*) from trips t
          join bookings b on b.id = t.booking_id and b.created_by = $1
          where t.state = 'pending_assignment' and t.driver_id is null`,
-        [claims.sub],
+        [partnerId],
       );
       return res.json({
         clientsEnrolled: Number(clientsCount.rows[0]?.count ?? 0),
@@ -400,7 +401,8 @@ function registerRoutes(prefix: "/partner" | "/agent") {
   app.get(`${prefix}/bookings`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);
-      requireRole(claims, ["partner"]);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
       const q = String(req.query.q ?? "").trim().toLowerCase();
       const status = String(req.query.status ?? "").trim().toLowerCase();
       const sort = String(req.query.sort ?? "created_desc").trim().toLowerCase();
@@ -415,7 +417,7 @@ function registerRoutes(prefix: "/partner" | "/agent") {
             : sort === "created_asc"
               ? "b.created_at asc"
               : "b.created_at desc";
-      const params: unknown[] = [claims.sub];
+      const params: unknown[] = [partnerId];
       const where: string[] = ["b.created_by = $1"];
       if (status && status !== "all") {
         params.push(status);
@@ -469,7 +471,8 @@ function registerRoutes(prefix: "/partner" | "/agent") {
   app.get(`${prefix}/clients`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);
-      requireRole(claims, ["partner"]);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
       const q = String(req.query.q ?? "").trim().toLowerCase();
       const sort = String(req.query.sort ?? "name_asc").trim().toLowerCase();
       const page = Math.max(1, Number(req.query.page ?? 1) || 1);
@@ -483,7 +486,7 @@ function registerRoutes(prefix: "/partner" | "/agent") {
             : sort === "bookings_asc"
               ? "bookings_count::int asc, rp.full_name asc nulls last, u.email asc"
               : "rp.full_name asc nulls last, u.email asc";
-      const params: unknown[] = [claims.sub];
+      const params: unknown[] = [partnerId];
       const where: string[] = ["pc.partner_id = $1"];
       if (q) {
         params.push(`%${q}%`);
@@ -528,7 +531,8 @@ function registerRoutes(prefix: "/partner" | "/agent") {
   app.get(`${prefix}/riders`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);
-      requireRole(claims, ["partner"]);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
       const result = await pool.query(
         `select u.id, u.email, rp.full_name, rp.phone
          from partner_clients pc
@@ -537,7 +541,7 @@ function registerRoutes(prefix: "/partner" | "/agent") {
          where pc.partner_id = $1
          order by rp.full_name nulls last, u.email
          limit 500`,
-        [claims.sub],
+        [partnerId],
       );
       return res.json({ items: result.rows });
     } catch (error) {
@@ -602,12 +606,13 @@ function registerRoutes(prefix: "/partner" | "/agent") {
   app.patch(`${prefix}/clients/:riderId`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);
-      requireRole(claims, ["partner"]);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
       const { riderId } = req.params;
       const { fullName, phone, ndisId, notes } = parseClientInput(req.body);
       const owned = await pool.query(
         "select 1 from partner_clients where partner_id = $1 and rider_id = $2",
-        [claims.sub, riderId],
+        [partnerId, riderId],
       );
       if (!owned.rowCount) return res.status(404).json({ error: "Client not found in your partner roster" });
       await pool.query(
@@ -620,7 +625,7 @@ function registerRoutes(prefix: "/partner" | "/agent") {
       );
       await pool.query(
         "update partner_clients set notes = coalesce($3, notes) where partner_id = $1 and rider_id = $2",
-        [claims.sub, riderId, notes],
+        [partnerId, riderId, notes],
       );
       return res.json({ ok: true });
     } catch (error) {
@@ -670,12 +675,24 @@ function registerRoutes(prefix: "/partner" | "/agent") {
         return res.status(403).json({ error: "You can only book rides for your own clients" });
       }
 
-      const inserted = await pool.query(
-        `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes, created_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,'pending_matching',$9,$10,$11)
-         returning id, pickup, dropoff, scheduled_at, status, created_at`,
-        [riderId, pickup, dropoff, pickupLat, pickupLng, dropoffLat, dropoffLng, scheduledAt, req.body?.mobilityNeeds ?? null, req.body?.notes ?? null, claims.sub],
-      );
+      let inserted;
+      try {
+        inserted = await pool.query(
+          `insert into bookings (rider_id, pickup, dropoff, pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, scheduled_at, status, mobility_needs, notes, created_by)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,'pending_matching',$9,$10,$11)
+           returning id, pickup, dropoff, scheduled_at, status, created_at`,
+          [riderId, pickup, dropoff, pickupLat, pickupLng, dropoffLat, dropoffLng, scheduledAt, req.body?.mobilityNeeds ?? null, req.body?.notes ?? null, claims.sub],
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "";
+        if (!/pickup_lat|dropoff_lat/i.test(msg)) throw error;
+        inserted = await pool.query(
+          `insert into bookings (rider_id, pickup, dropoff, scheduled_at, status, mobility_needs, notes, created_by)
+           values ($1,$2,$3,$4,'pending_matching',$5,$6,$7)
+           returning id, pickup, dropoff, scheduled_at, status, created_at`,
+          [riderId, pickup, dropoff, scheduledAt, req.body?.mobilityNeeds ?? null, req.body?.notes ?? null, claims.sub],
+        );
+      }
       const booking = inserted.rows[0] as { id: string };
       await pool.query("insert into trips (booking_id, state) values ($1, 'pending_assignment')", [booking.id]);
 
@@ -702,13 +719,14 @@ function registerRoutes(prefix: "/partner" | "/agent") {
   app.get(`${prefix}/plans`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);
-      requireRole(claims, ["partner"]);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
       const rows = await pool.query(
         `select id, name, target_group, frequency, start_date, end_date, priority, notes, status, created_at, updated_at
          from partner_travel_plans
          where partner_id = $1
          order by created_at desc`,
-        [claims.sub],
+        [partnerId],
       );
       return res.json({ items: rows.rows });
     } catch (error) {
@@ -754,7 +772,8 @@ function registerRoutes(prefix: "/partner" | "/agent") {
   app.patch(`${prefix}/plans/:id`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);
-      requireRole(claims, ["partner"]);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
       const { id } = req.params;
       const updated = await pool.query(
         `update partner_travel_plans set
@@ -771,7 +790,7 @@ function registerRoutes(prefix: "/partner" | "/agent") {
          returning id`,
         [
           id,
-          claims.sub,
+          partnerId,
           req.body?.name ? String(req.body.name).trim() : null,
           req.body?.targetGroup ? String(req.body.targetGroup).trim() : null,
           req.body?.frequency ? String(req.body.frequency).trim() : null,
@@ -810,13 +829,14 @@ function registerRoutes(prefix: "/partner" | "/agent") {
   app.get(`${prefix}/support-tickets`, async (req, res) => {
     try {
       const claims = requireAuth(req.headers.authorization);
-      requireRole(claims, ["partner"]);
+      requireRole(claims, ["partner", "partner_employee"]);
+      const partnerId = await resolvePartnerScope(claims);
       const rows = await pool.query(
         `select id, issue_type, reference_id, priority, message, status, created_at, updated_at
          from support_tickets
          where created_by = $1 and role = 'partner'
          order by created_at desc`,
-        [claims.sub],
+        [partnerId],
       );
       return res.json({ items: rows.rows });
     } catch (error) {

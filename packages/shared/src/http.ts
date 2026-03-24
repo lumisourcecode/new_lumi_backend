@@ -79,7 +79,7 @@ export const createUserBodySchema = z.object({
   vehicleRego: z.string().optional(),
 }).transform((data) => ({
   ...data,
-  role: data.role === "agent" ? "partner" : data.role,
+  role: data.role === "agent" ? "partner_employee" : data.role,
 }));
 
 export function getBearerToken(authHeader?: string) {
