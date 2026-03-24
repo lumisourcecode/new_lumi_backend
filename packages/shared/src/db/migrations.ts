@@ -36,6 +36,11 @@ create table if not exists rider_profiles (
   ndis_id text,
   created_at timestamptz not null default now()
 );
+alter table rider_profiles add column if not exists plan_manager_email text;
+alter table rider_profiles add column if not exists address_line1 text;
+alter table rider_profiles add column if not exists suburb text;
+alter table rider_profiles add column if not exists state text;
+alter table rider_profiles add column if not exists postcode text;
 
 create table if not exists driver_profiles (
   user_id uuid primary key references users(id) on delete cascade,

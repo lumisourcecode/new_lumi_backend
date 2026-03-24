@@ -7,6 +7,7 @@ import {
 } from "@lumi/shared";
 import express from "express";
 import cors from "cors";
+import archiver from "archiver";
 import { generateInvoicePDF, InvoiceData } from "./pdf-engine.js";
 
 const app = express();
@@ -171,6 +172,160 @@ app.post("/admin/invoices/:id/send", async (req, res) => {
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Internal Error";
     return res.status(500).json({ error: msg });
+  }
+});
+
+async function loadInvoiceDataForPdf(invoiceId: string): Promise<InvoiceData | null> {
+  const invoiceRes = await pool.query(
+    `select i.invoice_number, i.issue_date, i.due_date, i.total_amount, i.tax_amount, i.currency, i.notes,
+            rp.full_name as rider_name
+     from invoices i
+     join users u on u.id = i.recipient_id
+     left join rider_profiles rp on rp.user_id = i.recipient_id
+     where i.id = $1`,
+    [invoiceId],
+  );
+  if (!invoiceRes.rowCount) return null;
+  const inv = invoiceRes.rows[0] as Record<string, unknown>;
+  const itemsRes = await pool.query(
+    `select description, ndis_support_item, quantity, unit_price, total_price from invoice_items where invoice_id = $1`,
+    [invoiceId],
+  );
+  const rows = itemsRes.rows as Array<Record<string, unknown>>;
+  if (rows.length === 0) {
+    return {
+      invoiceNumber: String(inv.invoice_number),
+      issueDate: inv.issue_date ? new Date(String(inv.issue_date)).toLocaleDateString("en-AU") : new Date().toLocaleDateString("en-AU"),
+      dueDate: inv.due_date ? new Date(String(inv.due_date)).toLocaleDateString("en-AU") : "",
+      recipientName: String(inv.rider_name || "Client"),
+      recipientAddress: "Australia",
+      items: [
+        {
+          description: "Transport service",
+          quantity: 1,
+          unitPrice: Number(inv.total_amount) || 0,
+          totalPrice: Number(inv.total_amount) || 0,
+        },
+      ],
+      totalAmount: Number(inv.total_amount) || 0,
+      taxAmount: Number(inv.tax_amount ?? 0) || 0,
+      currency: String(inv.currency || "AUD"),
+      notes: inv.notes ? String(inv.notes) : undefined,
+    };
+  }
+  const items = rows.map((row) => ({
+    description: String(row.description),
+    ndisCode: row.ndis_support_item ? String(row.ndis_support_item) : undefined,
+    quantity: Number(row.quantity),
+    unitPrice: Number(row.unit_price),
+    totalPrice: Number(row.total_price),
+  }));
+  return {
+    invoiceNumber: String(inv.invoice_number),
+    issueDate: inv.issue_date ? new Date(String(inv.issue_date)).toLocaleDateString("en-AU") : new Date().toLocaleDateString("en-AU"),
+    dueDate: inv.due_date ? new Date(String(inv.due_date)).toLocaleDateString("en-AU") : "",
+    recipientName: String(inv.rider_name || "Client"),
+    recipientAddress: "Australia",
+    items,
+    totalAmount: Number(inv.total_amount) || items.reduce((s, it) => s + it.totalPrice, 0),
+    taxAmount: Number(inv.tax_amount ?? 0) || 0,
+    currency: String(inv.currency || "AUD"),
+    notes: inv.notes ? String(inv.notes) : undefined,
+  };
+}
+
+app.get("/admin/invoices/:id/pdf", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const data = await loadInvoiceDataForPdf(req.params.id);
+    if (!data) return res.status(404).json({ error: "Invoice not found" });
+    const buf = await generateInvoicePDF(data);
+    const safeName = `${data.invoiceNumber.replace(/[^a-zA-Z0-9._-]/g, "_")}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${safeName}"`);
+    return res.send(Buffer.from(buf));
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Error";
+    console.error("[billing-service] pdf:", error);
+    return res.status(500).json({ error: msg });
+  }
+});
+
+app.post("/admin/invoices/from-trip", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const tripId = String(req.body?.tripId ?? "").trim();
+    if (!tripId) return res.status(400).json({ error: "tripId required" });
+    const result = await processTripCompletion(tripId, {});
+    if (!result) return res.status(404).json({ error: "Trip not found" });
+    return res.status(201).json({ invoice: result });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Error";
+    console.error("[billing-service] from-trip:", error);
+    return res.status(500).json({ error: msg });
+  }
+});
+
+app.post("/admin/invoices/bulk-from-trips", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const tripIds = Array.isArray(req.body?.tripIds) ? (req.body.tripIds as unknown[]).map((x) => String(x).trim()).filter(Boolean) : [];
+    if (!tripIds.length) return res.status(400).json({ error: "tripIds array required" });
+    if (tripIds.length > 100) return res.status(400).json({ error: "Max 100 trips per request" });
+    const out: Array<Record<string, unknown>> = [];
+    for (const tripId of tripIds) {
+      try {
+        const result = await processTripCompletion(tripId, {});
+        if (result) out.push({ tripId, ...result });
+      } catch (e) {
+        out.push({ tripId, error: e instanceof Error ? e.message : "failed" });
+      }
+    }
+    return res.json({ items: out });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Error";
+    return res.status(500).json({ error: msg });
+  }
+});
+
+app.get("/admin/invoices/zip-pack", async (req, res) => {
+  try {
+    const claims = requireAuth(req.headers.authorization);
+    requireRole(claims, ["admin"]);
+    const ids = String(req.query.ids ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!ids.length) return res.status(400).json({ error: "ids query param required (comma-separated invoice UUIDs)" });
+    if (ids.length > 40) return res.status(400).json({ error: "Max 40 invoices per zip" });
+
+    const archive = archiver("zip", { zlib: { level: 6 } });
+    archive.on("error", (err: Error) => {
+      console.error("[billing-service] zip:", err);
+    });
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="lumi-invoices-${Date.now()}.zip"`);
+    archive.pipe(res);
+
+    for (const id of ids) {
+      const data = await loadInvoiceDataForPdf(id);
+      if (!data) continue;
+      try {
+        const buf = await generateInvoicePDF(data);
+        const fname = `${data.invoiceNumber.replace(/[^a-zA-Z0-9._-]/g, "_")}.pdf`;
+        archive.append(Buffer.from(buf), { name: fname });
+      } catch (e) {
+        console.warn("[billing-service] skip pdf in zip", id, e);
+      }
+    }
+    await archive.finalize();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "Internal Error";
+    console.error("[billing-service] zip-pack:", error);
+    if (!res.headersSent) return res.status(500).json({ error: msg });
   }
 });
 
