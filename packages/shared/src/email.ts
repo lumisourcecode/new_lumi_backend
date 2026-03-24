@@ -88,6 +88,10 @@ async function getTransporter(context?: EmailContext) {
       port: cfg.port,
       secure: cfg.secure,
       auth: { user: cfg.user, pass: cfg.pass },
+      // Avoid hanging the admin SMTP test (and nginx 504) on bad host/firewall
+      connectionTimeout: 15_000,
+      greetingTimeout: 15_000,
+      socketTimeout: 30_000,
     });
   }
   return null;

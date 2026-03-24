@@ -6,6 +6,9 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 const app = express();
 const port = Number(process.env.GATEWAY_PORT ?? 4000);
 
+/** Nginx default proxy_read_timeout is 60s; align so long SMTP tests and slow admin queries do not get 504 early. */
+const PROXY_TIMEOUT_MS = Number(process.env.GATEWAY_PROXY_TIMEOUT_MS ?? 180_000);
+
 const authTarget = `http://localhost:${process.env.AUTH_SERVICE_PORT ?? 4100}`;
 const riderTarget = `http://localhost:${process.env.RIDER_SERVICE_PORT ?? 4200}`;
 const driverTarget = `http://localhost:${process.env.DRIVER_SERVICE_PORT ?? 4300}`;
@@ -20,34 +23,37 @@ app.get("/healthz", (_req, res) => {
   res.json({ ok: true, service: "api-gateway" });
 });
 
+const proxyOpts = (target: string, pathRewrite: Record<string, string>) => ({
+  target,
+  changeOrigin: true,
+  pathRewrite,
+  proxyTimeout: PROXY_TIMEOUT_MS,
+});
+
 app.use(
   "/auth",
   createProxyMiddleware({
-    target: authTarget,
-    changeOrigin: true,
-    pathRewrite: { "^/": "/auth/" },
+    ...proxyOpts(authTarget, { "^/": "/auth/" }),
   }),
 );
 
 app.use(
   "/rider",
   createProxyMiddleware({
-    target: riderTarget,
-    changeOrigin: true,
-    pathRewrite: { "^/": "/rider/" },
+    ...proxyOpts(riderTarget, { "^/": "/rider/" }),
   }),
 );
 
 app.use(
   "/driver",
   createProxyMiddleware({
-    target: driverTarget,
-    changeOrigin: true,
-    pathRewrite: { "^/": "/driver/" },
-    onProxyReq: (proxyReq, req) => {
-      if (req.headers.authorization) {
-        proxyReq.setHeader("Authorization", req.headers.authorization);
-      }
+    ...proxyOpts(driverTarget, { "^/": "/driver/" }),
+    on: {
+      proxyReq: (proxyReq, req) => {
+        if (req.headers.authorization) {
+          proxyReq.setHeader("Authorization", req.headers.authorization);
+        }
+      },
     },
   }),
 );
@@ -55,9 +61,7 @@ app.use(
 app.use(
   "/partner",
   createProxyMiddleware({
-    target: partnerTarget,
-    changeOrigin: true,
-    pathRewrite: { "^/": "/partner/" },
+    ...proxyOpts(partnerTarget, { "^/": "/partner/" }),
   }),
 );
 
@@ -65,27 +69,21 @@ app.use(
 app.use(
   "/agent",
   createProxyMiddleware({
-    target: partnerTarget,
-    changeOrigin: true,
-    pathRewrite: { "^/": "/partner/" },
+    ...proxyOpts(partnerTarget, { "^/": "/partner/" }),
   }),
 );
 
 app.use(
   "/admin",
   createProxyMiddleware({
-    target: adminTarget,
-    changeOrigin: true,
-    pathRewrite: { "^/": "/admin/" },
+    ...proxyOpts(adminTarget, { "^/": "/admin/" }),
   }),
 );
 
 app.use(
   "/billing",
   createProxyMiddleware({
-    target: billingTarget,
-    changeOrigin: true,
-    pathRewrite: { "^/": "/billing/" },
+    ...proxyOpts(billingTarget, { "^/": "/billing/" }),
   }),
 );
 
